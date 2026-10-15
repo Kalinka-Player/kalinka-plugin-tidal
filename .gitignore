@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+pkgroot/
+out/
+release/
+*.deb
+src/kalinka_plugin_tidal/_version.py
+.env
+session.json

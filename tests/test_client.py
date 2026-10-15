@@ -1,0 +1,256 @@
+import asyncio
+import json
+import logging
+import stat
+import threading
+from datetime import datetime
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+import pytest
+import requests
+from tidalapi.exceptions import AuthenticationError, ObjectNotFound, TooManyRequests
+from tidalapi.user import LoggedInUser
+
+from kalinka_plugin_sdk import ModuleHealthState
+from kalinka_plugin_sdk.inputmodule import SourceUnavailableError
+from kalinka_plugin_tidal.client import BoundedSession, TidalClient
+
+
+@pytest.fixture
+async def client(tmp_path):
+    instance = TidalClient(tmp_path / "tidal" / "session.json")
+    yield instance
+    await instance.close()
+
+
+def signed_in(client):
+    client.session.user = SimpleNamespace(id=1)
+    client.session.token_type = "Bearer"
+    client.session.access_token = "private-access"
+    client.session.refresh_token = "private-refresh"
+    client.session.expiry_time = datetime(2030, 1, 1)
+    client.ready = True
+
+
+async def test_credentials_saved_privately_and_refreshed_session_persisted(client):
+    signed_in(client)
+    await client.run(lambda: None)
+    assert stat.S_IMODE(client.session_path.stat().st_mode) == 0o600
+    data = json.loads(client.session_path.read_text())
+    assert data["access_token"]["data"] == "private-access"
+    client.session.access_token = "refreshed-access"
+    await client.run(lambda: None)
+    assert (
+        json.loads(client.session_path.read_text())["access_token"]["data"]
+        == "refreshed-access"
+    )
+    assert [path.name for path in client.session_path.parent.iterdir()] == [
+        "session.json"
+    ]
+    client.session.load_oauth_session = Mock(return_value=True)
+    assert await client.run(client._restore_session, authenticated=False)
+    client.session.load_oauth_session.assert_called_once_with(
+        token_type="Bearer",
+        access_token="refreshed-access",
+        refresh_token="private-refresh",
+        expiry_time=datetime(2030, 1, 1),
+        is_pkce=False,
+    )
+
+
+async def test_rotated_credentials_survive_a_subsequent_request_failure(client):
+    signed_in(client)
+
+    def fails_after_refresh():
+        client.session.refresh_token = "rotated-refresh"
+        raise TooManyRequests()
+
+    with pytest.raises(SourceUnavailableError):
+        await client.run(fails_after_refresh)
+    assert (
+        json.loads(client.session_path.read_text())["refresh_token"]["data"]
+        == "rotated-refresh"
+    )
+
+
+@pytest.mark.parametrize("data", ["not json", "[]", "{}", '{"expiry_time": []}'])
+async def test_corrupt_session_can_be_replaced_by_a_new_login(client, data):
+    client.session_path.parent.mkdir()
+    client.session_path.write_text(data)
+    assert not await client.run(client._restore_session, authenticated=False)
+
+
+async def test_library_session_files_without_expiry_are_supported(client):
+    signed_in(client)
+    await client.run(lambda: None)
+    data = json.loads(client.session_path.read_text())
+    del data["expiry_time"]
+    client.session_path.write_text(json.dumps(data))
+    client.session.load_oauth_session = Mock(return_value=True)
+    assert await client.run(client._restore_session, authenticated=False)
+    assert client.session.load_oauth_session.call_args.kwargs["expiry_time"] is None
+
+
+async def test_not_signed_in_fails_without_making_a_request(client):
+    work = Mock()
+    with pytest.raises(SourceUnavailableError, match="Sign in"):
+        await client.run(work)
+    work.assert_not_called()
+
+
+async def test_device_login_updates_status_and_persists_after_authorization(client):
+    link = SimpleNamespace(
+        verification_uri_complete="link.tidal.com/EXAMPLE", expires_in=30, interval=0
+    )
+    client.session.get_link_login = Mock(return_value=link)
+
+    def authorize(*args, **kwargs):
+        signed_in(client)
+        return True
+
+    client.session.process_link_login = Mock(side_effect=authorize)
+    task = asyncio.create_task(client.authenticate())
+    try:
+        async with asyncio.timeout(2):
+            while "Sign in" not in (client.state.message or ""):
+                await asyncio.sleep(0.01)
+        assert "https://link.tidal.com/EXAMPLE" in client.state.message
+        async with asyncio.timeout(3):
+            while client.state.state != ModuleHealthState.READY:
+                await asyncio.sleep(0.01)
+        assert client.ready
+        assert client.session_path.exists()
+        assert client.session.process_link_login.call_args.kwargs == {
+            "until_expiry": False
+        }
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+
+async def test_restored_login_needs_no_device_authorization(client):
+    signed_in(client)
+    await client.run(lambda: None)
+    client.ready = False
+    client.session.load_oauth_session = Mock(return_value=True)
+    client.session.get_link_login = Mock(
+        side_effect=AssertionError("No new login needed")
+    )
+    task = asyncio.create_task(client.authenticate())
+    try:
+        async with asyncio.timeout(2):
+            while client.state.state != ModuleHealthState.READY:
+                await asyncio.sleep(0.01)
+        client.session.get_link_login.assert_not_called()
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+
+async def test_revoked_session_starts_reauthentication(client):
+    client.ready = True
+    with pytest.raises(SourceUnavailableError, match="sign-in expired"):
+        await client.run(Mock(side_effect=AuthenticationError("sensitive details")))
+    assert not client.ready
+    assert client._reauthenticate.is_set()
+    assert "sensitive" not in client.state.message
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        requests.Timeout("secret"),
+        requests.ConnectionError("secret"),
+        TooManyRequests("secret"),
+    ],
+)
+async def test_transient_errors_are_sanitized_without_losing_sign_in(client, error):
+    client.ready = True
+    with pytest.raises(SourceUnavailableError) as caught:
+        await client.run(Mock(side_effect=error))
+    assert "secret" not in str(caught.value)
+    assert client.ready
+
+
+async def test_missing_items_are_distinct_from_outages(client):
+    client.ready = True
+    with pytest.raises(LookupError):
+        await client.run(Mock(side_effect=ObjectNotFound()))
+
+
+async def test_timed_out_worker_does_not_block_event_loop_or_race_next_call(client):
+    client.ready = True
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking():
+        started.set()
+        release.wait(2)
+
+    try:
+        with pytest.raises(SourceUnavailableError):
+            await client.run(blocking, timeout=0.05)
+        assert started.is_set()
+        second = Mock(return_value=42)
+        pending = asyncio.create_task(client.run(second))
+        await asyncio.sleep(0.02)
+        second.assert_not_called()
+        release.set()
+        assert await pending == 42
+    finally:
+        release.set()
+
+
+async def test_upstream_logs_do_not_leak_credentials(client, caplog):
+    client.ready = True
+    with caplog.at_level(logging.DEBUG):
+        await client.run(
+            lambda: logging.getLogger("tidalapi.session").error("private-access")
+        )
+        await client.run(
+            lambda: logging.getLogger("urllib3.connectionpool").debug("private-refresh")
+        )
+    assert "private-access" not in caplog.text
+    assert "private-refresh" not in caplog.text
+
+
+def test_transport_bounds_all_http_calls(monkeypatch):
+    request = Mock(return_value=object())
+    monkeypatch.setattr(requests.Session, "request", request)
+    session = BoundedSession()
+    session.get("https://api.tidal.com/v1/sessions")
+    assert request.call_args.kwargs["timeout"] == (0.5, 1.5)
+    session.deadline = 0
+    with pytest.raises(requests.Timeout):
+        session.post("https://auth.tidal.com/v1/oauth2/token")
+    assert request.call_count == 1
+    session.close()
+
+
+async def test_owned_playlists_are_listed_in_one_request(client):
+    session = client.session
+    session.user = LoggedInUser(session, 42)
+    playlist = {
+        "uuid": "owned-playlist",
+        "title": "Mine",
+        "numberOfTracks": 3,
+        "numberOfVideos": 0,
+        "description": "",
+        "duration": 600,
+        "type": "USER",
+        "image": None,
+        "squareImage": None,
+        "promotedArtists": [],
+        "creator": {"id": 42, "name": "Me"},
+    }
+    response = {"items": [{"playlist": playlist, "created": "2026-01-01T00:00:00Z"}]}
+    session.request.request = Mock(return_value=SimpleNamespace(json=lambda: response))
+    rows = await client.run(
+        lambda: session.user.playlist_and_favorite_playlists(offset=0, limit=50),
+        authenticated=False,
+    )
+    assert [row.name for row in rows] == ["Mine"]
+    session.request.request.assert_called_once()

@@ -1,0 +1,9 @@
+Package: kalinka-plugin-tidal
+Version: @VERSION@
+Section: python
+Priority: optional
+Architecture: all
+Depends: kalinka-plugin-sdk (>= 3.11), kalinka-plugin-sdk (<< 4), python3 (>= 3.11), ca-certificates
+Maintainer: Dmitry Savin <envelsavinds@gmail.com>
+Description: TIDAL catalog and streaming plugin for Kalinka Music Player
+ Browses TIDAL discovery pages and account collections using tidalapi.

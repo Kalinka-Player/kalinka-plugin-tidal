@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=77", "wheel", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kalinka-plugin-tidal"
+dynamic = ["version"]
+description = "TIDAL catalog and streaming plugin for Kalinka Player"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+requires-python = ">=3.11"
+authors = [{name = "Dmitry Savin", email = "envelsavinds@gmail.com"}]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "kalinka-plugin-sdk>=3.11,<4",
+    "tidalapi>=0.8.11,<0.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "build>=1", "setuptools-scm>=8", "flake8>=7"]
+
+[project.entry-points."kalinka.plugins"]
+kalinka_plugin_tidal = "kalinka_plugin_tidal:KalinkaPluginTidal"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools_scm]
+write_to = "src/kalinka_plugin_tidal/_version.py"
+tag_regex = "^kalinka-plugin-tidal-v(?P<version>\\d+\\.\\d+\\.\\d+)$"
+git_describe_command = "git describe --dirty --tags --long --match kalinka-plugin-tidal-v*"
+version_scheme = "guess-next-dev"
+local_scheme = "node-and-date"
+search_parent_directories = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = ["--tb=short", "--strict-markers"]

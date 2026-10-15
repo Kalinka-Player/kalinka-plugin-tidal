@@ -1,0 +1,83 @@
+name: Release
+
+on:
+  push:
+    tags: ['kalinka-plugin-tidal-v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build and publish
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    uses: ./.github/workflows/tests.yml
+    with:
+      ref: ${{ github.event.inputs.tag || github.ref }}
+  packages:
+    needs: tests
+    uses: ./.github/workflows/packages.yml
+    with:
+      ref: ${{ github.event.inputs.tag || github.ref }}
+  release:
+    name: Publish release
+    needs: packages
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          # Pure Python: publish one _all.deb after all four builds pass.
+          name: deb-debian13-arm64
+          path: release
+      - name: Verify release version and write notes
+        shell: bash
+        run: |
+          [[ "$TAG" =~ ^kalinka-plugin-tidal-v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          VERSION="${TAG#kalinka-plugin-tidal-v}"
+          test "$(dpkg-deb -f release/*.deb Version)" = "$VERSION"
+          (cd release && sha256sum -c SHA256SUMS)
+          awk -v want="## $VERSION" '
+            $0 == want { found = 1; next }
+            /^## / { found = 0 }
+            found
+          ' CHANGELOG.md > release-notes.md
+          test -s release-notes.md
+          cat >> release-notes.md <<EOF
+
+          ## Install
+
+          Download \`kalinka-plugin-tidal_${VERSION}_all.deb\` and \`SHA256SUMS\`, then run:
+
+          \`\`\`sh
+          sha256sum -c SHA256SUMS --ignore-missing
+          sudo apt install ./kalinka-plugin-tidal_${VERSION}_all.deb
+          \`\`\`
+
+          Supports Debian 13 and Ubuntu 24.04 on ARM64 and amd64. Requires Kalinka Player 5.9.1 or newer (below 6), SDK 3.11 or newer (below 4), and Python 3.11 or newer.
+
+          Enable TIDAL, restart, and follow the sign-in link in the module status. Playback requires a TIDAL subscription and supports direct unencrypted FLAC/MP3 streams. Live account sign-in and playback have not been verified for this experimental release.
+          EOF
+      - name: Publish package and checksum
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Published bytes are never replaced by a rerun. Corrections get a new version.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; refusing to replace its artifacts." >&2
+            exit 1
+          fi
+          gh release create "$TAG" release/*.deb release/SHA256SUMS release/build-info.json \
+            --verify-tag --draft --title "TIDAL ${TAG#kalinka-plugin-tidal-v}" \
+            --notes-file release-notes.md
+          gh release edit "$TAG" --draft=false
