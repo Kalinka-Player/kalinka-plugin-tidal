@@ -46,10 +46,18 @@ remove that file, and start it again. Existing files created by
 
 Catalog IDs survive restarts. Discovery pages are cached for five minutes;
 album, playlist, search, and collection listings use TIDAL's pagination, capped
-at 50 items per request. Search follows tidalapi's 300-result limit. Discovery
+at 50 items per request. Queue additions fetch successive pages up to the
+server's requested limit. A timeout or service failure aborts the addition;
+large cold requests may need retrying within the server's time budget.
+Search follows tidalapi's 300-result limit. Discovery
 shelves expose the items returned by TIDAL and a further page when TIDAL supplies
 a supported `pages/` link. Videos, articles, and unsupported link types are omitted.
 No catalog filters are advertised; unsupported filters are rejected.
+
+Sections without upstream identifiers use their type and title. Ambiguous
+same-title sections also use their content; a saved link expires if that
+content changes, so reopening its parent is necessary. Older V1 section links
+from 0.1.0 may also need to be reopened after upgrading.
 
 TIDAL collections are read-only in Kalinka. Edit TIDAL favorites and playlists
 in the TIDAL app; Kalinka's own collections can still reference TIDAL tracks.

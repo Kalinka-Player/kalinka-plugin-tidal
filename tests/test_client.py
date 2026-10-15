@@ -4,6 +4,7 @@ import logging
 import stat
 import threading
 from datetime import datetime
+from functools import partial
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -13,8 +14,10 @@ from tidalapi.exceptions import AuthenticationError, ObjectNotFound, TooManyRequ
 from tidalapi.user import LoggedInUser
 
 from kalinka_plugin_sdk import ModuleHealthState
+from kalinka_plugin_sdk.datamodel import EntityType
 from kalinka_plugin_sdk.inputmodule import SourceUnavailableError
 from kalinka_plugin_tidal.client import BoundedSession, TidalClient
+from kalinka_plugin_tidal.tidal import TidalInputModule, entity_id
 
 
 @pytest.fixture
@@ -254,3 +257,49 @@ async def test_owned_playlists_are_listed_in_one_request(client):
     )
     assert [row.name for row in rows] == ["Mine"]
     session.request.request.assert_called_once()
+
+
+async def test_bulk_timeout_fails_instead_of_returning_a_partial_queue(client, track):
+    client.ready = True
+    client.run = partial(client.run, timeout=0.05)
+    module = TidalInputModule(client)
+    cached = module._item(track)
+    release = threading.Event()
+
+    def delayed(tid):
+        release.wait(2)
+        return track
+
+    client.session.track = Mock(side_effect=delayed)
+    try:
+        with pytest.raises(SourceUnavailableError):
+            await module.get_all([cached.id, entity_id(EntityType.TRACK, "uncached")])
+    finally:
+        release.set()
+
+
+async def test_bulk_missing_ids_are_omitted_but_transient_failures_abort(client, track):
+    client.ready = True
+    module = TidalInputModule(client)
+    cached = module._item(track)
+    missing = entity_id(EntityType.TRACK, "missing")
+    client.session.track = Mock(side_effect=ObjectNotFound())
+    assert [item.id for item in await module.get_all([cached.id, missing, cached.id])] == [
+        cached.id, cached.id
+    ]
+    client.session.track = Mock(side_effect=TooManyRequests())
+    with pytest.raises(SourceUnavailableError):
+        await module.get_all([cached.id, missing])
+    client.session.track = Mock(side_effect=KeyError("malformed track"))
+    with pytest.raises(KeyError):
+        await module.get_all([cached.id, missing])
+
+
+async def test_later_container_page_error_aborts_the_whole_add(client, playlist, track):
+    client.ready = True
+    module = TidalInputModule(client)
+    playlist.num_tracks = 80
+    playlist.tracks = Mock(side_effect=[[track] * 50, requests.Timeout()])
+    item = module._item(playlist)
+    with pytest.raises(SourceUnavailableError):
+        await module.tracks_to_add(item.id, 5000)

@@ -1,14 +1,18 @@
+from copy import copy
 from importlib.metadata import entry_points
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
-from tidalapi.page import Page, PageItem, PageLink
+import tidalapi
+from tidalapi.exceptions import ObjectNotFound
+from tidalapi.page import PageItem, PageLink
 
 from kalinka_plugin_sdk.datamodel import EntityId, EntityType
 from kalinka_plugin_sdk.filters import FilterQuery, UnsupportedFilter
 from kalinka_plugin_sdk.inputmodule import SearchType, SourceUnavailableError
 from kalinka_plugin_tidal.config_model import TidalConfig
+from kalinka_plugin_tidal.client import CatalogPage
 from kalinka_plugin_tidal.tidal import TidalInputModule, entity_id, route
 
 
@@ -87,7 +91,7 @@ async def test_real_page_parsers_expose_catalogs_and_stable_routes(
                 }
             ]
         }
-    page = Page(session, "").parse(data)
+    page = CatalogPage(session, "").parse(data)
     session.home = Mock(return_value=page)
     shelves = await module.browse(cat("home"))
     assert [item.name for item in shelves.items] == ["New Releases"]
@@ -110,15 +114,46 @@ async def test_real_page_parsers_expose_catalogs_and_stable_routes(
 async def test_duplicate_shelf_titles_have_distinct_ids_and_reordering_is_safe(
     module, session, album, track
 ):
-    first = SimpleNamespace(title="Featured", type="ALBUM_LIST", items=[album])
-    second = SimpleNamespace(title="Featured", type="TRACK_LIST", items=[track])
-    page = SimpleNamespace(categories=[first, second])
-    session.explore = Mock(return_value=page)
+    # Use the real V1 parser: its categories originally lost their type.
+    session.parse_album = Mock(return_value=album)
+    session.parse_track = Mock(return_value=track)
+    rows = [
+        {"modules": [{"type": kind, "title": "Featured", "pagedList": {"items": [{}]}}]}
+        for kind in ("ALBUM_LIST", "TRACK_LIST")
+    ]
+    data = {"title": "Explore", "rows": rows}
+    session.request.request = Mock(return_value=SimpleNamespace(json=lambda: data))
+    # Recreate the page after the parser mocks are installed.
+    session.page = CatalogPage(session, "")
     shelves = (await module.browse(cat("explore"))).items
     assert shelves[0].id != shelves[1].id
-    page.categories.reverse()
+    rows.reverse()
     module._cache.clear()
     assert (await module.browse(shelves[0].id)).items[0].album is not None
+    assert (await module.browse(shelves[1].id)).items[0].track is not None
+
+
+async def test_identical_shelf_titles_and_types_never_retarget_old_routes(module, session):
+    def row(id):
+        return {"modules": [{
+            "type": "ALBUM_LIST", "title": "Featured", "pagedList": {"items": [{
+                "id": id, "title": str(id), "artists": [{"id": 7, "name": "Artist"}],
+                "cover": None, "videoCover": None, "numberOfTracks": 1, "streamReady": True,
+            }]},
+        }]}
+
+    rows = [row(10), row(20)]
+    data = {"title": "Explore", "rows": rows}
+    session.request.request = Mock(return_value=SimpleNamespace(json=lambda: data))
+    shelves = (await module.browse(cat("explore"))).items
+    rows.reverse()
+    module._cache.clear()
+    assert (await module.browse(shelves[0].id)).items[0].id.id == "10"
+    assert (await module.browse(shelves[1].id)).items[0].id.id == "20"
+    rows[1] = row(30)
+    module._cache.clear()
+    with pytest.raises(LookupError, match="section has changed"):
+        await module.browse(shelves[0].id)
 
 
 async def test_account_change_invalidates_personalized_pages(module, session, track):
@@ -217,7 +252,7 @@ async def test_search_selects_one_model_and_paginates(
     assert result.total == 52
     assert result.items[0].id.type.value == kind.value
     assert session.search.call_args.kwargs == {
-        "models": [type(item)],
+        "models": [getattr(tidalapi, kind.value.capitalize())],
         "offset": 50,
         "limit": 1,
     }
@@ -285,6 +320,90 @@ async def test_track_queueing_is_lazy_and_stream_urls_are_resolved_each_time(
         await module.get_track_source("11")
     ).source.url == "https://cdn.example/audio.flac"
     assert track.get_stream.call_count == 2
+
+
+def numbered_tracks(track, count):
+    rows = []
+    for number in range(count):
+        item = copy(track)
+        item.id = number
+        rows.append(item)
+    return rows
+
+
+@pytest.mark.parametrize("kind", ["album", "playlist"])
+@pytest.mark.parametrize("limit", [0, 61, 5000])
+async def test_container_add_pages_tracks_and_honors_the_queue_limit(
+    module, session, album, playlist, track, kind, limit
+):
+    parent = album if kind == "album" else playlist
+    rows = numbered_tracks(track, 80)
+    rows[-1] = rows[0]  # A repeated playlist track must retain its position.
+    parent.num_tracks = len(rows)
+    parent.tracks = Mock(side_effect=lambda offset, limit: rows[offset:offset + limit])
+    item = module._item(parent)
+    session.track = Mock(side_effect=AssertionError("Queue metadata was already fetched"))
+    ids = await module.tracks_to_add(item.id, limit)
+    assert [eid.id for eid in ids] == [str(row.id) for row in rows[:limit]]
+    assert [item.id for item in await module.get_all(ids)] == ids
+    assert all(call.kwargs["limit"] <= 50 for call in parent.tracks.call_args_list)
+    if limit > 50:
+        assert parent.tracks.call_args_list[1].kwargs["offset"] == 50
+
+
+async def test_large_container_keeps_metadata_until_the_queue_resolves_it(
+    module, session, playlist, track
+):
+    rows = numbered_tracks(track, 600)
+    playlist.num_tracks = len(rows)
+    playlist.tracks = Mock(side_effect=lambda offset, limit: rows[offset:offset + limit])
+    item = module._item(playlist)
+    ids = await module.tracks_to_add(item.id, 5000)
+    session.track = Mock(side_effect=AssertionError("Do not refetch expanded tracks"))
+    assert len(ids) == 600
+    assert [item.id for item in await module.get_all(ids)] == ids
+
+
+async def test_empty_page_before_container_end_fails_the_add(module, playlist, track):
+    playlist.num_tracks = 80
+    playlist.tracks = Mock(side_effect=[numbered_tracks(track, 50), []])
+    item = module._item(playlist)
+    with pytest.raises(SourceUnavailableError, match="incomplete track list"):
+        await module.tracks_to_add(item.id, 5000)
+
+
+async def test_short_upstream_pages_do_not_skip_tracks(module, playlist, track):
+    rows = numbered_tracks(track, 80)
+    playlist.num_tracks = len(rows)
+    playlist.tracks = Mock(
+        side_effect=lambda offset, limit: rows[offset:offset + min(limit, 17)]
+    )
+    item = module._item(playlist)
+    ids = await module.tracks_to_add(item.id, 5000)
+    assert [eid.id for eid in ids] == [str(row.id) for row in rows]
+    assert [call.kwargs["offset"] for call in playlist.tracks.call_args_list] == [
+        0, 17, 34, 51, 68
+    ]
+
+
+async def test_mix_add_includes_tracks_beyond_the_first_page(module, session, track):
+    rows = numbered_tracks(track, 80)
+    session.mix = Mock(return_value=SimpleNamespace(items=Mock(return_value=rows)))
+    ids = await module.tracks_to_add(cat(route("mix", "daily")), 5000)
+    assert [eid.id for eid in ids] == [str(row.id) for row in rows]
+    session.mix.assert_called_once_with("daily")
+
+
+async def test_account_change_discards_queue_metadata(module, session, playlist, track):
+    session.user = SimpleNamespace(id=1)
+    playlist.num_tracks = 1
+    playlist.tracks = Mock(return_value=[track])
+    item = module._item(playlist)
+    ids = await module.tracks_to_add(item.id, 5000)
+    session.user = SimpleNamespace(id=2)
+    session.track = Mock(side_effect=ObjectNotFound())
+    assert await module.get_all(ids) == []
+    session.track.assert_called_once_with("11")
 
 
 @pytest.mark.parametrize(

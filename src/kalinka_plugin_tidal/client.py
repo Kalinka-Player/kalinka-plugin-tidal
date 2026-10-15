@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 import requests
 import tidalapi
 from tidalapi.exceptions import AuthenticationError, ObjectNotFound, TidalAPIError
+from tidalapi.page import Page, PageCategory
 
 from kalinka_plugin_sdk import ModuleHealthState, ModuleState
 from kalinka_plugin_sdk.inputmodule import SourceUnavailableError
@@ -58,7 +59,27 @@ class CatalogPlaylist(tidalapi.Playlist):
         return self
 
 
+class CatalogPageCategory(PageCategory):
+    def parse(self, data):
+        category = super().parse(data)
+        # V1 parsers discard these fields. Keep them for stable shelf routes.
+        category.type = data["type"]
+        category.module_id = data.get("moduleId")
+        return category
+
+
+class CatalogPage(Page):
+    def __init__(self, session, title):
+        super().__init__(session, title)
+        self.page_category = CatalogPageCategory(session)
+
+
 class CatalogSession(tidalapi.Session):
+    def __init__(self, config):
+        super().__init__(config)
+        self.page = CatalogPage(self, "")
+        self.parse_page = self.page.parse
+
     def playlist(self, playlist_id=None):
         return CatalogPlaylist(self, playlist_id)
 

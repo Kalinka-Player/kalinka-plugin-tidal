@@ -5,6 +5,7 @@ import requests
 import tidalapi
 
 from kalinka_plugin_tidal.tidal import TidalInputModule
+from kalinka_plugin_tidal.client import CatalogSession
 
 
 @pytest.fixture(autouse=True)
@@ -17,7 +18,7 @@ def no_network(monkeypatch):
 
 @pytest.fixture
 def session():
-    value = tidalapi.Session(tidalapi.Config())
+    value = CatalogSession(tidalapi.Config())
     yield value
     value.request_session.close()
 

@@ -10,7 +10,8 @@ from urllib.parse import unquote, urlsplit
 
 import tidalapi
 from tidalapi.mix import Mix, MixV2
-from tidalapi.page import Page, PageItem, PageLink
+from tidalapi.exceptions import ObjectNotFound
+from tidalapi.page import PageItem, PageLink
 
 from kalinka_plugin_sdk.datamodel import (
     Album,
@@ -40,6 +41,8 @@ from kalinka_plugin_sdk.inputmodule import (
     TrackInfo,
     TrackSource,
 )
+
+from .client import CatalogPage
 
 PAGES = {
     "home": ("Home", "home"),
@@ -192,6 +195,9 @@ class TidalInputModule(InputModule):
         self.client = client
         self.session = client.session
         self._cache = OrderedDict()
+        # Container expansion is followed by get_all(). Keep that metadata
+        # briefly, including containers larger than the general entity cache.
+        self._queue_metadata = OrderedDict()
         self._account_id = None
 
     def module_name(self):
@@ -220,6 +226,7 @@ class TidalInputModule(InputModule):
         account_id = getattr(self.session.user, "id", None)
         if account_id != self._account_id:
             self._cache.clear()
+            self._queue_metadata.clear()
             self._account_id = account_id
 
     @staticmethod
@@ -375,26 +382,46 @@ class TidalInputModule(InputModule):
                 return getattr(self.session, PAGES[value][1])()
             parts = parse_route(value)
             if len(parts) == 2 and parts[0] == "page":
-                return Page(self.session, "").get(page_path(parts[1]))
+                return CatalogPage(self.session, "").get(page_path(parts[1]))
             raise LookupError("Unknown TIDAL page.")
 
         return self._cached(("page", value), load)
 
     def _categories(self, value):
-        seen = {}
-        result = []
+        counts = {}
+        categories = []
         for category in self._page(value).categories or []:
             rows = getattr(category, "items", None)
             if not isinstance(rows, list):
                 continue
             title = getattr(category, "title", None) or "Featured"
+            more = getattr(category, "_more", None)
             identity = (
                 getattr(category, "module_id", None)
-                or f"{getattr(category, 'type', '')}/{title}"
+                or f"{getattr(category, 'type', '')}/{title}/{getattr(more, 'api_path', '')}"
             )
-            occurrence = seen.get(identity, 0)
-            seen[identity] = occurrence + 1
-            key = hashlib.sha256(f"{identity}/{occurrence}".encode()).hexdigest()[:20]
+            counts[identity] = counts.get(identity, 0) + 1
+            categories.append((identity, title, category))
+        result = []
+        for identity, title, category in categories:
+            discriminator = "0"
+            if counts[identity] > 1:
+                # No upstream id distinguishes these shelves. Content
+                # fingerprints survive reordering; changed content makes
+                # an old route expire instead of pointing somewhere else.
+                discriminator = json.dumps(sorted(
+                    (
+                        type(item).__name__,
+                        str(getattr(item, "type", "")),
+                        str(getattr(item, "id", "")),
+                        str(getattr(item, "artifact_id", "")),
+                        str(getattr(item, "api_path", "")),
+                    )
+                    for item in category.items
+                ))
+            key = hashlib.sha256(
+                f"{identity}/{discriminator}".encode()
+            ).hexdigest()[:20]
             result.append((key, title, category))
         return result
 
@@ -442,6 +469,44 @@ class TidalInputModule(InputModule):
                 limit,
             )
         return await self.client.run(lambda: self._browse(entity_id, offset, limit))
+
+    async def tracks_to_add(self, entity_id, limit):
+        self._validate_id(entity_id)
+        if limit <= 0 or (
+            entity_id.type == EntityType.CATALOG
+            and entity_id.id in ("root", "collection")
+        ):
+            return []
+
+        def expand():
+            self._check_account()
+            tracks = []
+            offset = 0
+            while len(tracks) < limit:
+                page = self._browse(entity_id, offset, min(MAX_LIMIT, limit - len(tracks)))
+                if not page.items and offset < page.total:
+                    raise SourceUnavailableError(
+                        "TIDAL returned an incomplete track list. Try again."
+                    )
+                for item in page.items:
+                    if item.track is not None:
+                        tracks.append(item.id)
+                        self._queue_metadata[item.id.to_string] = (
+                            time.monotonic() + 30, item
+                        )
+                        self._queue_metadata.move_to_end(item.id.to_string)
+                        while len(self._queue_metadata) > 5000:
+                            self._queue_metadata.popitem(last=False)
+                        if len(tracks) == limit:
+                            break
+                offset += len(page.items)
+                if offset >= page.total:
+                    break
+            return tracks
+
+        # All pages share one deadline; a failure aborts the add, so the
+        # server never receives a silently truncated container.
+        return await self.client.run(expand)
 
     def _browse(self, eid, offset, limit):
         if eid.type in (EntityType.ALBUM, EntityType.PLAYLIST):
@@ -547,10 +612,13 @@ class TidalInputModule(InputModule):
 
     async def get(self, entity_id):
         self._validate_id(entity_id)
-        if entity_id.type != EntityType.CATALOG:
-            return await self.client.run(
-                lambda: self._item(self._entity(entity_id.type, entity_id.id))
-            )
+        if entity_id.type == EntityType.CATALOG:
+            item = self._static_catalog(entity_id)
+            if item is not None:
+                return item
+        return await self.client.run(lambda: self._get(entity_id))
+
+    def _static_catalog(self, entity_id):
         for item in [
             catalog("root", "TIDAL", role=CatalogRole.INDEX),
             *self._root(),
@@ -558,38 +626,72 @@ class TidalInputModule(InputModule):
         ]:
             if item.id == entity_id:
                 return item
+        return None
+
+    def _get(self, entity_id):
+        self._check_account()
+        cached = self._queue_metadata.get(entity_id.to_string)
+        if cached and cached[0] > time.monotonic():
+            return cached[1]
+        if entity_id.type != EntityType.CATALOG:
+            return self._item(self._entity(entity_id.type, entity_id.id))
+        static = self._static_catalog(entity_id)
+        if static is not None:
+            return static
+
+        parts = parse_route(entity_id.id)
+        if parts[0] == "category" and len(parts) == 3:
+            for key, title, _ in self._categories(parts[1]):
+                if key == parts[2]:
+                    return catalog(entity_id.id, title)
+        elif parts[0] == "page" and len(parts) == 2:
+            page = self._page(entity_id.id)
+            return catalog(
+                entity_id.id, page.title or "TIDAL", role=CatalogRole.INDEX
+            )
+        elif parts[0] == "mix" and len(parts) == 2:
+            return self._item(self.session.mix(parts[1]))
+        elif parts[0] in ("tracks", "promotion") and len(parts) == 3:
+            kind = EntityType(parts[1])
+            item = self._item(self._entity(kind, parts[2]))
+            return catalog(
+                entity_id.id,
+                item.name,
+                can_add=item.can_add,
+                content=(
+                    PreviewContentType.TRACK if kind != EntityType.ARTIST else None
+                ),
+            )
+        elif parts[0] == "artist" and len(parts) == 3:
+            item = self._item(self._entity(EntityType.ARTIST, parts[1]))
+            for section in item.sections:
+                if section.id == entity_id:
+                    return section
+        raise LookupError("Unknown TIDAL catalog.")
+
+    async def get_all(self, entity_ids):
+        if not entity_ids:
+            return []
+        for eid in entity_ids:
+            self._validate_id(eid)
 
         def resolve():
-            parts = parse_route(entity_id.id)
-            if parts[0] == "category" and len(parts) == 3:
-                for key, title, _ in self._categories(parts[1]):
-                    if key == parts[2]:
-                        return catalog(entity_id.id, title)
-            elif parts[0] == "page" and len(parts) == 2:
-                page = self._page(entity_id.id)
-                return catalog(
-                    entity_id.id, page.title or "TIDAL", role=CatalogRole.INDEX
-                )
-            elif parts[0] == "mix" and len(parts) == 2:
-                return self._item(self.session.mix(parts[1]))
-            elif parts[0] in ("tracks", "promotion") and len(parts) == 3:
-                kind = EntityType(parts[1])
-                item = self._item(self._entity(kind, parts[2]))
-                return catalog(
-                    entity_id.id,
-                    item.name,
-                    can_add=item.can_add,
-                    content=(
-                        PreviewContentType.TRACK if kind != EntityType.ARTIST else None
-                    ),
-                )
-            elif parts[0] == "artist" and len(parts) == 3:
-                item = self._item(self._entity(EntityType.ARTIST, parts[1]))
-                for section in item.sections:
-                    if section.id == entity_id:
-                        return section
-            raise LookupError("Unknown TIDAL catalog.")
+            items = []
+            for eid in entity_ids:
+                try:
+                    items.append(self._get(eid))
+                except ObjectNotFound:
+                    # The SDK permits missing entities to be omitted. Network
+                    # failures and timeouts must fail the whole lookup.
+                    continue
+                except LookupError as error:
+                    if type(error) is not LookupError:
+                        # KeyError/IndexError indicate malformed API data.
+                        raise
+            return items
 
+        # The SDK default gathers per-id calls and discards their exceptions.
+        # Submit one operation so executor waiting cannot lose individual ids.
         return await self.client.run(resolve)
 
     async def get_track_info(self, track_ids):
@@ -600,7 +702,7 @@ class TidalInputModule(InputModule):
             return [
                 TrackInfo(
                     id=entity_id(EntityType.TRACK, tid),
-                    metadata=self._item(self._entity(EntityType.TRACK, tid)).track,
+                    metadata=self._get(entity_id(EntityType.TRACK, tid)).track,
                     source_retriever=partial(self.get_track_source, tid),
                 )
                 for tid in track_ids
