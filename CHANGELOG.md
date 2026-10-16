@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.1
 
 - Add a one-shot setting to forget TIDAL authorization on the next restart,
   with sign-in status visible in plugin settings.
