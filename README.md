@@ -21,6 +21,8 @@ Kalinka Player restarts to discover the plugin after installation.
 
 Enable **TIDAL** in module settings and restart the server. Open the **Sign in to
 TIDAL** link in the module's status and authorize your account in the browser.
+The link also appears under **TIDAL account** in the plugin settings. If the
+status still says "Connecting", reopen the Plugins screen to refresh it.
 The status becomes ready when authorization completes. Expired sign-in links
 are replaced automatically. Authentication and retries happen in the background.
 
@@ -30,19 +32,32 @@ in Kalinka's settings. Playback requires a TIDAL streaming subscription.
 The session is stored with owner-only permissions at
 `<state_dir>/tidal/session.json` (normally `/var/lib/kalinka/tidal/session.json`;
 development uses `$KALINKA_PREFIX/var/lib/kalinka/tidal/session.json`). Refreshed
-credentials are persisted automatically. To change accounts, stop Kalinka,
-remove that file, and start it again. Existing files created by
+credentials are persisted automatically. Existing files created by
 `tidalapi.Session.save_session_to_file()` can also be used there.
+
+### Change accounts
+
+In **Plugins → TIDAL**, turn on **Forget TIDAL account on next restart**, then
+apply and restart. This removes the saved authorization from this player and
+resets the switch automatically. Reopen TIDAL's settings and follow **Sign in
+to TIDAL** to authorize the new account. If the browser remembers the previous
+account, sign out of TIDAL in that browser before following the link.
+
+For older plugin versions without this setting, stop Kalinka, delete
+`<state_dir>/tidal/session.json`, and start Kalinka again. Stop it before deleting
+the file so the running plugin cannot save the old session again. Forgetting an
+account on this player does not sign it out on other devices.
 
 ## Catalogs
 
-- **Home** and **Explore** expose the sections returned for your account and region.
-- **Genres** and **Moods** open TIDAL's nested discovery pages.
-- **My Mixes** exposes personalized mixes and their tracks.
 - **My Collection** exposes favorite tracks, albums, artists, and your created
   and saved playlists.
+- **My Mixes** exposes personalized mixes and their tracks.
 - Albums and playlists expose tracks; artists expose albums, EPs and singles,
   top tracks, and similar artists. Search supports all four entity types.
+
+The catalog starts with just My Collection and My Mixes. Home, Explore, Genres,
+and Moods are no longer listed; previously saved links to them still work.
 
 Catalog IDs survive restarts. Discovery pages are cached for five minutes;
 album, playlist, search, and collection listings use TIDAL's pagination, capped
@@ -64,8 +79,15 @@ in the TIDAL app; Kalinka's own collections can still reference TIDAL tracks.
 
 ## Playback and limitations
 
-The plugin requests lossless audio and resolves a fresh stream URL when a track
-starts playing. Direct, unencrypted FLAC and MP3 streams are supported. Segmented
+**Audio quality** in the plugin settings shows the automatic request: lossless
+FLAC, up to **16-bit / 44.1 kHz (CD quality)**. This is the highest tier currently
+supported by this integration, so there is no quality selector. TIDAL Max /
+hi-res playback is not implemented. Some tracks may be supplied at a lower
+quality; this setting describes the requested tier, not a measurement of the
+playing stream.
+
+The plugin resolves a fresh stream URL when a track starts playing. Direct,
+unencrypted FLAC and MP3 streams are supported. Segmented
 DASH, encrypted streams, and AAC/MP4 streams are rejected with a readable error;
 they require playback capabilities the native Kalinka renderer does not provide.
 There is no transcoding or downloading of whole tracks.

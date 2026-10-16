@@ -26,3 +26,17 @@ class TidalConfig(ModuleConfig):
         ),
         json_schema_extra={"importance": "simple"},
     )
+    unpair: bool = Field(
+        default=False,
+        title="Forget TIDAL account on next restart",
+        json_schema_extra={
+            "help": (
+                "Clear the saved authorization on this player. Apply and restart, "
+                "then use Sign in to TIDAL to choose an account. If the browser "
+                "remembers the old account, sign out there first. This switch "
+                "resets automatically."
+            ),
+            "one_shot": True,
+            "importance": "simple",
+        },
+    )

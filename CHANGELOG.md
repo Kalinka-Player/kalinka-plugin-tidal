@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add a one-shot setting to forget TIDAL authorization on the next restart,
+  with sign-in status visible in plugin settings.
+- Show the automatically requested CD-quality lossless tier and explain that
+  TIDAL Max / hi-res playback is not supported yet.
+- Reduce the catalog root to My Collection and My Mixes, while retaining search
+  and previously saved discovery links.
 - Expand albums, playlists and mixes past the first 50 tracks when adding them
   to the queue, retaining metadata for the server's subsequent lookup.
 - Fail a bulk metadata lookup on timeout or service errors instead of silently

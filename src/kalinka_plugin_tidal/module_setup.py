@@ -1,8 +1,9 @@
 import asyncio
 from contextlib import suppress
 from pathlib import Path
+from typing import ClassVar
 
-from kalinka_plugin_sdk import ModuleHealthState, ModuleState, paths
+from kalinka_plugin_sdk import DynamicFieldDecl, ModuleHealthState, ModuleState, paths
 from kalinka_plugin_sdk.plugin import InputModulePlugin, InputPluginContext
 
 from .client import TidalClient
@@ -14,6 +15,23 @@ class KalinkaPluginTidal(InputModulePlugin):
     PLUGIN_ID = "tidal"
     REQUIRES_SDK = ">=3.11,<4"
     CONFIG_MODEL = TidalConfig
+    DYNAMIC_FIELDS: ClassVar[dict[str, DynamicFieldDecl]] = {
+        "account_status": DynamicFieldDecl(
+            section_id="",
+            label="TIDAL account",
+            widget="rich_text",
+        ),
+        "audio_quality": DynamicFieldDecl(
+            section_id="",
+            label="Audio quality",
+            widget="rich_text",
+            help=(
+                "The highest quality supported by this plugin is requested "
+                "automatically. TIDAL Max / hi-res playback is not supported yet. "
+                "Some tracks may only be available in a lower quality."
+            ),
+        ),
+    }
 
     def __init__(self):
         self.interface = None
@@ -21,7 +39,11 @@ class KalinkaPluginTidal(InputModulePlugin):
         self._login_task = None
 
     async def setup(self, context: InputPluginContext):
-        self._client = TidalClient(Path(paths.state_dir()) / "tidal" / "session.json")
+        config = TidalConfig(**context.config.model_dump())
+        session_path = Path(paths.state_dir()) / "tidal" / "session.json"
+        if config.unpair:
+            session_path.unlink(missing_ok=True)
+        self._client = TidalClient(session_path)
         self.interface = TidalInputModule(self._client)
         self._login_task = asyncio.create_task(self._client.authenticate())
 
@@ -32,6 +54,15 @@ class KalinkaPluginTidal(InputModulePlugin):
         if self._client is None:
             return ModuleState(state=ModuleHealthState.DISABLED)
         return self._client.state
+
+    async def resolve_dynamic_field(self, path: str):
+        if path == "audio_quality":
+            return "Lossless FLAC — up to 16-bit / 44.1 kHz (CD quality)."
+        if path == "account_status":
+            if self._client is None:
+                return "Enable TIDAL and restart to sign in."
+            return self._client.state.message or "Signed in to TIDAL."
+        raise KeyError(path)
 
     async def shutdown(self):
         if self._login_task is not None:
