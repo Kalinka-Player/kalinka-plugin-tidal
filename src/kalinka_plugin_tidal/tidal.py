@@ -62,6 +62,7 @@ KINDS = {
     EntityType.PLAYLIST: tidalapi.Playlist,
 }
 MAX_LIMIT = 50
+MP4_MIME_TYPES = frozenset({"audio/mp4", "audio/m4a"})
 
 
 def entity_id(kind, value):
@@ -740,7 +741,12 @@ class TidalInputModule(InputModule):
                 raise SourceUnavailableError(
                     "TIDAL returned an unsupported stream manifest."
                 )
-            manifest = stream.get_stream_manifest()
+            try:
+                manifest = stream.get_stream_manifest()
+            except (KeyError, ValueError):
+                raise SourceUnavailableError(
+                    "TIDAL returned an invalid stream manifest."
+                ) from None
             if manifest.encryption_type not in (None, "NONE"):
                 raise SourceUnavailableError(
                     "TIDAL returned an encrypted stream that this player cannot play."
@@ -748,21 +754,25 @@ class TidalInputModule(InputModule):
             urls = manifest.get_urls()
             if not urls or urlsplit(urls[0]).scheme not in ("https", "http"):
                 raise SourceUnavailableError("TIDAL did not provide a playable stream.")
-            codec = str(manifest.codecs).upper().split(".")[0]
-            if codec in ("AAC", "MP4A"):
-                raise SourceUnavailableError(
-                    "TIDAL returned AAC audio for this session and track, "
-                    "which this renderer cannot play. The selected quality "
-                    "is a request; TIDAL did not supply lossless FLAC."
-                )
-            if codec not in ("FLAC", "MP3"):
-                raise SourceUnavailableError(
-                    "TIDAL returned an unsupported audio codec; "
-                    "this renderer needs direct FLAC or MP3."
-                )
-            return TrackSource(source=DirectUrl(url=urls[0]), format=codec.lower())
+            return TrackSource(
+                source=DirectUrl(url=urls[0]), format=self._direct_format(manifest)
+            )
 
         return await self.client.run(resolve, timeout=7.5)
+
+    @staticmethod
+    def _direct_format(manifest):
+        codec = str(manifest.codecs).upper().split(".")[0]
+        container = str(manifest.mime_type or "").split(";")[0].strip().lower()
+        if codec in ("AAC", "MP4A"):
+            return "audio/mp4"
+        if codec == "FLAC":
+            return "audio/mp4" if container in MP4_MIME_TYPES else "flac"
+        if codec == "MP3":
+            return "mp3"
+        raise SourceUnavailableError(
+            f"TIDAL returned {codec} audio, which this player cannot play."
+        )
 
     @staticmethod
     def _dash_manifest(stream):
