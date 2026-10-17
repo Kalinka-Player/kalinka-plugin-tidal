@@ -12,9 +12,10 @@
   Remove browser-response fields and add an Unlink Tidal switch using
   Apply & Restart. Existing valid sessions remain signed in until reset.
 - Add requested Lossless and Max / hi-res quality choices; default to Max.
-  TIDAL controls the returned codec and resolution; AAC remains unsupported.
-- Explain AAC playback refusals and distinguish them from segmented streams.
-  Test direct FLAC/MP3 and AAC responses through tidalapi's real manifest parser.
+  TIDAL controls the returned codec and resolution.
+- Play AAC and MP4 streams, direct or segmented, as `audio/mp4`. Requires a
+  renderer with AAC support. Other codecs are refused, naming the codec.
+  Test direct FLAC/MP3/AAC responses through tidalapi's real manifest parser.
 - Restore Home and its audio discovery sections alongside My Collection and
   My Mixes.
 - Enable TIDAL by default so the installation restart also starts sign-in,

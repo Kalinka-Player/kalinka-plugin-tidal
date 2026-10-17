@@ -35,7 +35,7 @@ class TidalConfig(ModuleConfig):
             "widget": "enum_dropdown",
             "importance": "simple",
             "help": (
-                "TIDAL may return a lower quality. AAC streams cannot be played."
+                "TIDAL may return a lower quality, such as AAC."
             ),
         },
     )

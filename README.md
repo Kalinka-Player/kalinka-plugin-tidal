@@ -97,15 +97,16 @@ Apply and restart after changing quality. This controls the quality requested
 from TIDAL, not the format of the renderer's output. TIDAL chooses the actual
 codec, container and resolution for the track and session; the API does not offer
 an independent FLAC/MP3/WAV output-format selector. Device authorisation may
-return AAC even for a lossless request. AAC remains unsupported by the native
-renderer, and those tracks report an explicit playback error.
+return AAC even for a lossless request; such tracks play as AAC.
 
 The plugin resolves a fresh stream URL when a track starts playing. Direct,
-unencrypted FLAC and MP3 streams are supported. DASH manifests are served to
-the renderer through Kalinka's content endpoint, with fresh signed segment URLs
-on each manifest request. Segmented FLAC requires a native renderer built with
-MPEG-DASH support; older renderers cannot play it. Encrypted and AAC streams
-remain unsupported.
+unencrypted FLAC, MP3 and MP4 streams are supported; MP4 carries AAC or FLAC
+audio. DASH manifests are served to the renderer through Kalinka's content
+endpoint, with fresh signed segment URLs on each manifest request; their
+segments carry FLAC or AAC. Segmented streams need a native renderer built with
+MPEG-DASH support, and AAC or MP4 streams one with AAC support; older renderers report
+these tracks as unsupported. Encrypted streams and other codecs such as Dolby
+Atmos are rejected with a readable error.
 There is no transcoding or downloading of whole tracks.
 
 tidalapi is an unofficial client. Availability depends on the account, region,

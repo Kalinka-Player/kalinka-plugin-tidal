@@ -373,6 +373,7 @@ async def test_track_queueing_is_lazy_and_stream_urls_are_resolved_each_time(
             return_value=SimpleNamespace(
                 encryption_type="NONE",
                 codecs="FLAC",
+                mime_type="audio/flac",
                 get_urls=lambda: ["https://cdn.example/audio.flac"],
             )
         ),
@@ -478,7 +479,7 @@ async def test_account_change_discards_queue_metadata(module, session, playlist,
     [
         (False, "NONE", "FLAC", "https://cdn.example/segment"),
         (True, "OLD_AES", "FLAC", "https://cdn.example/encrypted"),
-        (True, "NONE", "MP4A", "https://cdn.example/aac"),
+        (True, "NONE", "EAC3", "https://cdn.example/atmos"),
         (True, "NONE", "FLAC", "file:///etc/passwd"),
     ],
 )
@@ -492,6 +493,7 @@ async def test_unsupported_streams_fail_clearly(
             get_stream_manifest=lambda: SimpleNamespace(
                 encryption_type=encryption,
                 codecs=codec,
+                mime_type="audio/mp4",
                 get_urls=lambda: [url],
             ),
         )
@@ -522,26 +524,57 @@ async def test_real_bts_manifest_returns_renderer_format(module, session, track,
     assert session.request.request.call_args.args[2]["audioquality"] == session.config.quality
 
 
-@pytest.mark.parametrize("codec", ["AAC", "mp4a.40.2"])
-@pytest.mark.parametrize("pkce", [True, False])
-async def test_real_aac_manifest_explains_quality_and_renderer_limitations(module, session, track, codec, pkce):
-    session.is_pkce = pkce
+def bts_stream(**manifest):
     payload = {
-        "mimeType": "audio/mp4", "codecs": codec, "encryptionType": "NONE",
-        "urls": ["https://cdn.example/audio.m4a?token=private"],
+        "encryptionType": "NONE",
+        "urls": ["https://cdn.example/audio?token=private"],
+        **manifest,
     }
-    stream = Stream().parse({
-        "trackId": 11, "audioQuality": "HIGH",
+    return Stream().parse({
+        "trackId": 11,
+        "audioQuality": "LOSSLESS",
         "manifestMimeType": "application/vnd.tidal.bts",
         "manifest": base64.b64encode(json.dumps(payload).encode()).decode(),
     })
-    track.get_stream = Mock(return_value=stream)
+
+
+@pytest.mark.parametrize(
+    "codec,mime_type,format",
+    [
+        ("AAC", "audio/mp4", "audio/mp4"),
+        ("mp4a.40.2", "audio/mp4", "audio/mp4"),
+        ("mp4a.40.5", "audio/m4a", "audio/mp4"),
+        ("FLAC", "audio/mp4", "audio/mp4"),
+        ("flac", "audio/flac", "flac"),
+        ("FLAC", "audio/x-flac", "flac"),
+        ("FLAC", None, "flac"),
+        ("MP3", "audio/mpeg", "mp3"),
+    ],
+)
+async def test_bts_stream_format_follows_codec_and_container(
+    module, track, codec, mime_type, format
+):
+    track.get_stream = Mock(return_value=bts_stream(codecs=codec, mimeType=mime_type))
     module._item(track)
-    with pytest.raises(SourceUnavailableError, match="AAC") as caught:
+    source = await module.get_track_source("11")
+    assert source.format == format
+    assert source.source.url == "https://cdn.example/audio?token=private"
+
+
+@pytest.mark.parametrize("codec", ["EAC3", "AC4", "MHA1"])
+async def test_bts_stream_with_unplayable_codec_is_refused(module, track, codec):
+    track.get_stream = Mock(return_value=bts_stream(codecs=codec, mimeType="audio/mp4"))
+    module._item(track)
+    with pytest.raises(SourceUnavailableError, match=codec) as caught:
         await module.get_track_source("11")
-    assert "selected quality is a request" in str(caught.value)
-    assert "Browser sign-in" not in str(caught.value)
     assert "private" not in str(caught.value)
+
+
+async def test_bts_manifest_without_mime_type_is_refused(module, track):
+    track.get_stream = Mock(return_value=bts_stream(codecs="FLAC"))
+    module._item(track)
+    with pytest.raises(SourceUnavailableError, match="invalid stream manifest"):
+        await module.get_track_source("11")
 
 
 @pytest.mark.parametrize(

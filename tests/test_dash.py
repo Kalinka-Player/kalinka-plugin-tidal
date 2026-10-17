@@ -20,6 +20,9 @@ MANIFEST = '''<?xml version="1.0" encoding="UTF-8"?>
     </Representation>
   </AdaptationSet></Period>
 </MPD>'''
+AAC_MANIFEST = MANIFEST.replace(
+    'id="FLAC,44100,16" codecs="flac"', 'id="AAC,44100" codecs="mp4a.40.2"'
+)
 
 
 def stream(xml=MANIFEST):
@@ -30,8 +33,9 @@ def stream(xml=MANIFEST):
     })
 
 
-async def test_dash_is_served_as_a_manifest_for_the_renderer(module, session, track):
-    track.get_stream = Mock(return_value=stream())
+@pytest.mark.parametrize("xml", [MANIFEST, AAC_MANIFEST])
+async def test_dash_is_served_as_a_manifest_for_the_renderer(module, session, track, xml):
+    track.get_stream = Mock(return_value=stream(xml))
     session.track = Mock(return_value=track)
     source = await module.get_track_source("11")
     assert source.source == ModuleAsset(module="tidal", asset_id="dash-11")
@@ -40,13 +44,13 @@ async def test_dash_is_served_as_a_manifest_for_the_renderer(module, session, tr
     assert "private" not in source.model_dump_json()
     info = await module.get_content_info(source.source.asset_id)
     assert info.mime_type == "application/dash+xml"
-    assert info.size == len(MANIFEST.encode())
+    assert info.size == len(xml.encode())
     assert not info.cacheable
     with info.reader() as reader:
         reader.seek(10)
-        assert reader.read() == MANIFEST.encode()[10:]
+        assert reader.read() == xml.encode()[10:]
     with info.reader() as reader:
-        assert reader.read() == MANIFEST.encode()
+        assert reader.read() == xml.encode()
 
 
 async def test_manifest_urls_are_refreshed_when_requested(module, session, track):
