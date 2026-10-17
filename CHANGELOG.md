@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.1
 
 - Warn when TIDAL rejects the saved sign-in and offer a new sign-in link that
   says the sign-in expired, instead of the first-time prompt. Browsing reports
