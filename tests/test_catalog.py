@@ -40,11 +40,14 @@ async def test_root_is_paginated_and_available_before_sign_in(module):
     module.client.run = Mock(side_effect=AssertionError("No network for the root"))
     first = await module.browse(cat("root"), limit=1)
     rest = await module.browse(cat("root"), offset=1)
-    assert first.total == rest.total == 3
+    assert first.total == rest.total == 6
     assert [item.name for item in first.items + rest.items] == [
         "Home",
-        "My Collection",
+        "Explore",
+        "Genres",
+        "Moods",
         "My Mixes",
+        "My Collection",
     ]
     for item in first.items + rest.items:
         assert await module.get(item.id) == item
@@ -52,8 +55,9 @@ async def test_root_is_paginated_and_available_before_sign_in(module):
 
 @pytest.mark.parametrize("page,title", [
     ("home", "Home"), ("explore", "Explore"), ("genres", "Genres"), ("moods", "Moods"),
+    ("mixes", "My Mixes"),
 ])
-async def test_saved_discovery_pages_remain_resolvable(module, session, page, title):
+async def test_discovery_pages_load_their_tidal_page(module, session, page, title):
     getattr_page = Mock(return_value=SimpleNamespace(categories=[]))
     setattr(session, page, getattr_page)
     assert (await module.get(cat(page))).name == title

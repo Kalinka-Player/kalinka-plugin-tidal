@@ -441,10 +441,9 @@ class TidalInputModule(InputModule):
     @staticmethod
     def _root():
         return [
-            catalog("home", "Home", role=CatalogRole.INDEX),
-            catalog("collection", "My Collection", role=CatalogRole.INDEX),
-            catalog("mixes", "My Mixes", role=CatalogRole.INDEX),
-        ]
+            catalog(key, title, role=CatalogRole.INDEX)
+            for key, (title, _) in PAGES.items()
+        ] + [catalog("collection", "My Collection", role=CatalogRole.INDEX)]
 
     @staticmethod
     def _collection():
@@ -637,9 +636,6 @@ class TidalInputModule(InputModule):
             catalog("root", "TIDAL", role=CatalogRole.INDEX),
             *self._root(),
             *self._collection(),
-            # Keep saved discovery links working without listing them at the root.
-            *(catalog(key, title, role=CatalogRole.INDEX)
-              for key, (title, _) in PAGES.items()),
         ]:
             if item.id == entity_id:
                 return item
