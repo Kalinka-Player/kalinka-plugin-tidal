@@ -8,6 +8,9 @@
   notices revocation. An outage of TIDAL's sign-in server keeps the sign-in,
   and browsing during a reconnect says TIDAL is connecting. A track TIDAL
   refuses to play reports the refusal instead of interrupting the sign-in.
+- Add albums and playlists whose track count includes tracks TIDAL no longer
+  lists, instead of failing with "incomplete track list". Listed tracks that
+  cannot be streamed are still added and fail when played.
 
 ## 0.2.0
 

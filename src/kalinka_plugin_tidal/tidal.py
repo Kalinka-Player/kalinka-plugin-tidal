@@ -491,10 +491,10 @@ class TidalInputModule(InputModule):
             offset = 0
             while len(tracks) < limit:
                 page = self._browse(entity_id, offset, min(MAX_LIMIT, limit - len(tracks)))
-                if not page.items and offset < page.total:
-                    raise SourceUnavailableError(
-                        "TIDAL returned an incomplete track list. Try again."
-                    )
+                if not page.items:
+                    # Track counts include tracks TIDAL no longer lists, so
+                    # the list can end before the advertised total.
+                    break
                 for item in page.items:
                     if item.track is not None:
                         tracks.append(item.id)
@@ -511,8 +511,8 @@ class TidalInputModule(InputModule):
                     break
             return tracks
 
-        # All pages share one deadline; a failure aborts the add, so the
-        # server never receives a silently truncated container.
+        # All pages share one deadline; a request failure aborts the add.
+        # Only a list that ends early (see above) is added as returned.
         return await self.client.run(expand)
 
     def _browse(self, eid, offset, limit):

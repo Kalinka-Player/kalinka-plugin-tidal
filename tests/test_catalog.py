@@ -436,12 +436,29 @@ async def test_large_container_keeps_metadata_until_the_queue_resolves_it(
     assert [item.id for item in await module.get_all(ids)] == ids
 
 
-async def test_empty_page_before_container_end_fails_the_add(module, playlist, track):
-    playlist.num_tracks = 80
-    playlist.tracks = Mock(side_effect=[numbered_tracks(track, 50), []])
-    item = module._item(playlist)
-    with pytest.raises(SourceUnavailableError, match="incomplete track list"):
-        await module.tracks_to_add(item.id, 5000)
+@pytest.mark.parametrize("kind", ["album", "playlist"])
+@pytest.mark.parametrize("listed", [0, 10, 50])
+async def test_tracks_tidal_no_longer_lists_do_not_fail_the_add(
+    module, album, playlist, track, kind, listed
+):
+    # TIDAL counts tracks that its track listing omits.
+    parent = album if kind == "album" else playlist
+    rows = numbered_tracks(track, listed)
+    parent.num_tracks = listed + 2
+    parent.tracks = Mock(side_effect=lambda offset, limit: rows[offset:offset + limit])
+    item = module._item(parent)
+    ids = await module.tracks_to_add(item.id, 5000)
+    assert [eid.id for eid in ids] == [str(row.id) for row in rows]
+
+
+async def test_unplayable_listed_tracks_are_still_added(module, album, track):
+    track.available = False
+    album.num_tracks = 1
+    album.tracks = Mock(return_value=[track])
+    ids = await module.tracks_to_add(module._item(album).id, 5000)
+    [added] = await module.get_all(ids)
+    assert added.id == ids[0]
+    assert added.track.unavailable
 
 
 async def test_short_upstream_pages_do_not_skip_tracks(module, playlist, track):
