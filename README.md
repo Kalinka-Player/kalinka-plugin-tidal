@@ -2,7 +2,8 @@
 
 Uses the existing [tidalapi](https://github.com/EbbLabs/python-tidal) Python client
 for authentication, catalog metadata, and stream manifests. Requires Python 3.11+
-and Kalinka Player 5.9.1+ with Plugin SDK 3.11–3.x.
+and Kalinka Player 5.11.0+ (below 6) with Plugin SDK 3.11–3.x. AAC, MP4 and
+segmented streams play on Kalinka renderer 0.10.0 or newer.
 
 ## Install and sign in
 
@@ -102,10 +103,9 @@ The plugin resolves a fresh stream URL when a track starts playing. Direct,
 unencrypted FLAC, MP3 and MP4 streams are supported; MP4 carries AAC or FLAC
 audio. DASH manifests are served to the renderer through Kalinka's content
 endpoint, with fresh signed segment URLs on each manifest request; their
-segments carry FLAC or AAC. Segmented streams need a native renderer built with
-MPEG-DASH support, and AAC or MP4 streams one with AAC support; older renderers report
-these tracks as unsupported. Encrypted streams and other codecs such as Dolby
-Atmos are rejected with a readable error.
+segments carry FLAC or AAC. Segmented, AAC and MP4 streams need Kalinka renderer
+0.10.0 or newer; older renderers report these tracks as unsupported. Encrypted
+streams and other codecs such as Dolby Atmos are rejected with a readable error.
 There is no transcoding or downloading of whole tracks.
 
 tidalapi is an unofficial client. Availability depends on the account, region,

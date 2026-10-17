@@ -1,7 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
 
+- Require Kalinka Player 5.11.0 or newer (below 6). AAC, MP4 and segmented
+  streams play on Kalinka renderer 0.10.0 or newer.
 - Pass DASH manifests to the renderer for native segmented FLAC playback,
   instead of rejecting every segmented stream. Requires a renderer with DASH support.
 - Send explicit track and artist action flags so existing apps can decode album
