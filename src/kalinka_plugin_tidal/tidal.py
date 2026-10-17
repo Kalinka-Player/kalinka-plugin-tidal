@@ -2,8 +2,10 @@
 
 import base64
 import hashlib
+import io
 import json
 import time
+import xml.etree.ElementTree as ET
 from collections import OrderedDict
 from functools import partial
 from urllib.parse import unquote, urlsplit
@@ -34,8 +36,10 @@ from kalinka_plugin_sdk.datamodel import (
 )
 from kalinka_plugin_sdk.filters import UnsupportedFilter, or_unfiltered
 from kalinka_plugin_sdk.inputmodule import (
+    ContentInfo,
     DirectUrl,
     InputModule,
+    ModuleAsset,
     SearchType,
     SourceUnavailableError,
     TrackInfo,
@@ -206,21 +210,21 @@ class TidalInputModule(InputModule):
     def display_name(self):
         return "TIDAL"
 
-    def _remember(self, key, value):
+    def _remember(self, key, value, *, ttl=300):
         self._check_account()
-        self._cache[key] = (time.monotonic() + 300, value)
+        self._cache[key] = (time.monotonic() + ttl, value)
         self._cache.move_to_end(key)
         while len(self._cache) > 512:
             self._cache.popitem(last=False)
         return value
 
-    def _cached(self, key, load):
+    def _cached(self, key, load, *, ttl=300):
         self._check_account()
         stored = self._cache.get(key)
         if stored and stored[0] > time.monotonic():
             self._cache.move_to_end(key)
             return stored[1]
-        return self._remember(key, load())
+        return self._remember(key, load(), ttl=ttl)
 
     def _check_account(self):
         account_id = getattr(self.session.user, "id", None)
@@ -265,6 +269,7 @@ class TidalInputModule(InputModule):
                 name=metadata.title,
                 track=metadata,
                 subname=performer.name if performer else None,
+                can_browse=False,
                 can_add=item.available,
             )
         elif isinstance(item, tidalapi.Album):
@@ -291,6 +296,7 @@ class TidalInputModule(InputModule):
                 name=metadata.name,
                 artist=metadata,
                 can_browse=True,
+                can_add=False,
                 sections=[
                     catalog(route("artist", str(item.id), kind), title, content=content)
                     for kind, title, content in (
@@ -434,6 +440,7 @@ class TidalInputModule(InputModule):
     @staticmethod
     def _root():
         return [
+            catalog("home", "Home", role=CatalogRole.INDEX),
             catalog("collection", "My Collection", role=CatalogRole.INDEX),
             catalog("mixes", "My Mixes", role=CatalogRole.INDEX),
         ]
@@ -598,12 +605,18 @@ class TidalInputModule(InputModule):
         kind = EntityType(type.value)
 
         def search():
-            rows = self.session.search(
-                query,
-                models=[KINDS[kind]],
-                offset=offset,
-                limit=min(limit, 300 - offset),
-            )[kind.value + "s"]
+            # Kalinka asks for all four kinds concurrently on one serialized client.
+            results = self._cached(
+                ("search", query, offset, limit),
+                lambda: self.session.search(
+                    query,
+                    models=list(KINDS.values()),
+                    offset=offset,
+                    limit=min(limit, 300 - offset),
+                ),
+                ttl=5,
+            )
+            rows = results[kind.value + "s"]
             result = self._remote_list(rows, offset, limit)
             result.total = min(result.total, 300)
             return result
@@ -717,9 +730,15 @@ class TidalInputModule(InputModule):
         def resolve():
             # Never cache signed stream URLs: resolve at the moment of play.
             stream = self._entity(EntityType.TRACK, track_id).get_stream()
+            if stream.is_mpd:
+                self._dash_manifest(stream)
+                return TrackSource(
+                    source=ModuleAsset(module="tidal", asset_id=f"dash-{track_id}"),
+                    format="application/dash+xml",
+                )
             if not stream.is_bts:
                 raise SourceUnavailableError(
-                    "TIDAL returned a segmented stream that this player cannot play."
+                    "TIDAL returned an unsupported stream manifest."
                 )
             manifest = stream.get_stream_manifest()
             if manifest.encryption_type not in (None, "NONE"):
@@ -730,13 +749,55 @@ class TidalInputModule(InputModule):
             if not urls or urlsplit(urls[0]).scheme not in ("https", "http"):
                 raise SourceUnavailableError("TIDAL did not provide a playable stream.")
             codec = str(manifest.codecs).upper().split(".")[0]
+            if codec in ("AAC", "MP4A"):
+                raise SourceUnavailableError(
+                    "TIDAL returned AAC audio for this session and track, "
+                    "which this renderer cannot play. The selected quality "
+                    "is a request; TIDAL did not supply lossless FLAC."
+                )
             if codec not in ("FLAC", "MP3"):
                 raise SourceUnavailableError(
-                    "TIDAL did not provide a supported lossless stream."
+                    "TIDAL returned an unsupported audio codec; "
+                    "this renderer needs direct FLAC or MP3."
                 )
             return TrackSource(source=DirectUrl(url=urls[0]), format=codec.lower())
 
         return await self.client.run(resolve, timeout=7.5)
+
+    @staticmethod
+    def _dash_manifest(stream):
+        try:
+            data = stream.get_manifest_data().encode("utf-8")
+            if (len(data) > 1024 * 1024
+                    or b"<!DOCTYPE" in data or b"<!ENTITY" in data):
+                raise ValueError
+            root = ET.fromstring(data)
+            if root.tag != "{urn:mpeg:dash:schema:mpd:2011}MPD":
+                raise ValueError
+        except (ValueError, ET.ParseError, UnicodeError):
+            raise SourceUnavailableError("TIDAL returned an invalid DASH manifest.") from None
+        if any(e.tag.rsplit("}", 1)[-1] == "ContentProtection" for e in root.iter()):
+            raise SourceUnavailableError("Encrypted TIDAL streams are not supported.")
+        return data
+
+    async def get_content_info(self, asset_id):
+        if (not asset_id.startswith("dash-")
+                or not asset_id[5:].isascii() or not asset_id[5:].isdigit()):
+            return None
+
+        def resolve():
+            stream = self._entity(EntityType.TRACK, asset_id[5:]).get_stream()
+            if not stream.is_mpd:
+                raise SourceUnavailableError(
+                    "TIDAL changed the stream format. Play the track again."
+                )
+            data = self._dash_manifest(stream)
+            return ContentInfo(
+                mime_type="application/dash+xml",
+                reader=lambda: io.BytesIO(data), size=len(data), cacheable=False,
+            )
+
+        return await self.client.run(resolve)
 
     # TIDAL account collections are exposed above as read-only catalogs. The
     # legacy favorite/playlist mutation API isn't advertised or emulated.

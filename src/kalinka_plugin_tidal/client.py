@@ -85,10 +85,10 @@ class CatalogSession(tidalapi.Session):
 
 
 class TidalClient:
-    def __init__(self, session_path: Path):
+    def __init__(self, session_path: Path, *, quality=tidalapi.Quality.hi_res_lossless):
         self.session_path = session_path
         self.session = CatalogSession(
-            tidalapi.Config(quality=tidalapi.Quality.high_lossless, item_limit=50)
+            tidalapi.Config(quality=quality, item_limit=50)
         )
         self.session.request_session.close()
         self.session.request_session = BoundedSession()
@@ -191,7 +191,7 @@ class TidalClient:
         return self.session.load_oauth_session(**args)
 
     async def authenticate(self):
-        """Restore or offer a device link; polling is cancellable on shutdown."""
+        """Restore a saved session or wait for device authorisation."""
         while True:
             try:
                 try:
@@ -215,7 +215,10 @@ class TidalClient:
                         raise ValueError("Unexpected TIDAL sign-in address")
                     self.state = ModuleState(
                         state=ModuleHealthState.WARNING,
-                        message=f"[Sign in to TIDAL]({url}) to open your catalogs.",
+                        message=(
+                            f"[Sign in to TIDAL]({url}) and approve this player. "
+                            "Kalinka will connect automatically."
+                        ),
                     )
                     expires = time.monotonic() + login.expires_in
                     # The library's one-shot poll sleeps before raising
