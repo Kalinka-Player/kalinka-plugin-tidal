@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+- Pass DASH manifests to the renderer for native segmented FLAC playback,
+  instead of rejecting every segmented stream. Requires a renderer with DASH support.
+- Send explicit track and artist action flags so existing apps can decode album
+  listings and search results.
+- Combine concurrent search categories into one TIDAL request to avoid timing
+  out the last category and failing the entire search.
+- Use device authorisation: approve the TIDAL link and connect automatically.
+  Remove browser-response fields and add an Unlink Tidal switch using
+  Apply & Restart. Existing valid sessions remain signed in until reset.
+- Add requested Lossless and Max / hi-res quality choices; default to Max.
+  TIDAL controls the returned codec and resolution; AAC remains unsupported.
+- Explain AAC playback refusals and distinguish them from segmented streams.
+  Test direct FLAC/MP3 and AAC responses through tidalapi's real manifest parser.
+- Restore Home and its audio discovery sections alongside My Collection and
+  My Mixes.
+- Enable TIDAL by default so the installation restart also starts sign-in,
+  without a second restart to enable the plugin. Explicit disable settings
+  remain respected.
+
 ## 0.1.1
 
 - Add a one-shot setting to forget TIDAL authorization on the next restart,

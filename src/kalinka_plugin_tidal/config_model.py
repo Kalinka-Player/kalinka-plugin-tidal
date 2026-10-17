@@ -1,8 +1,14 @@
+from enum import Enum
 from typing import ClassVar
 
 from pydantic import Field
 
 from kalinka_plugin_sdk.module_config import ModuleConfig
+
+
+class TidalAudioQuality(str, Enum):
+    LOSSLESS = "Lossless — 16-bit / 44.1 kHz"
+    MAX = "Max — up to 24-bit / 192 kHz"
 
 
 class TidalConfig(ModuleConfig):
@@ -17,25 +23,30 @@ class TidalConfig(ModuleConfig):
         exclude=True,
     )
     enabled: bool = Field(
-        default=False,
-        title="Module enabled",
-        description=(
-            "Enable and restart, then open the sign-in link in this module's "
-            "status. A TIDAL account with a streaming subscription is required "
-            "for playback."
-        ),
+        default=True,
+        title="Enable TIDAL",
+        description="Sign in using the link under TIDAL account.",
         json_schema_extra={"importance": "simple"},
+    )
+    audio_quality: TidalAudioQuality = Field(
+        default=TidalAudioQuality.MAX,
+        title="Maximum audio quality",
+        json_schema_extra={
+            "widget": "enum_dropdown",
+            "importance": "simple",
+            "help": (
+                "TIDAL may return a lower quality. AAC streams cannot be played."
+            ),
+        },
     )
     unpair: bool = Field(
         default=False,
-        title="Forget TIDAL account on next restart",
+        title="Unlink Tidal",
         json_schema_extra={
             "help": (
-                "Clear the saved authorization on this player. Apply and restart, "
-                "then use Sign in to TIDAL to choose an account. If the browser "
-                "remembers the old account, sign out there first. This switch "
-                "resets automatically."
+                "Forget this account on Apply & Restart, then sign in with another account."
             ),
+            "widget": "toggle",
             "one_shot": True,
             "importance": "simple",
         },

@@ -19,15 +19,21 @@ The architecture-independent package supports Debian 13 and Ubuntu 24.04 on
 ARM64 and amd64. CI builds and tests the packaged wheel on all four targets.
 Kalinka Player restarts to discover the plugin after installation.
 
-Enable **TIDAL** in module settings and restart the server. Open the **Sign in to
-TIDAL** link in the module's status and authorize your account in the browser.
-The link also appears under **TIDAL account** in the plugin settings. If the
-status still says "Connecting", reopen the Plugins screen to refresh it.
-The status becomes ready when authorization completes. Expired sign-in links
-are replaced automatically. Authentication and retries happen in the background.
+TIDAL is enabled by default and starts sign-in after the installation restart.
+Device authorisation uses a TIDAL link and approval in your browser:
 
-The plugin is disabled by default. No password or developer API key is required
-in Kalinka's settings. Playback requires a TIDAL streaming subscription.
+1. Open **Sign in to TIDAL** under **TIDAL account** in the plugin settings.
+2. Sign in to TIDAL and approve this player.
+3. Kalinka detects approval automatically and saves the session.
+
+There is no callback URL to paste and no restart to finish signing in.
+If the status still says "Connecting", reopen the Plugins screen to refresh it.
+Expired links are replaced automatically. Existing valid sessions remain signed
+in until you reset authorisation, including sessions from earlier browser sign-in.
+
+No password or developer API key is required in Kalinka's settings. Playback
+requires a TIDAL streaming subscription. An explicitly saved disabled setting
+is respected; enable TIDAL and restart if you previously disabled it.
 
 The session is stored with owner-only permissions at
 `<state_dir>/tidal/session.json` (normally `/var/lib/kalinka/tidal/session.json`;
@@ -37,11 +43,10 @@ credentials are persisted automatically. Existing files created by
 
 ### Change accounts
 
-In **Plugins → TIDAL**, turn on **Forget TIDAL account on next restart**, then
-apply and restart. This removes the saved authorization from this player and
-resets the switch automatically. Reopen TIDAL's settings and follow **Sign in
-to TIDAL** to authorize the new account. If the browser remembers the previous
-account, sign out of TIDAL in that browser before following the link.
+In **Plugins → TIDAL**, turn on **Unlink Tidal**, then **Apply & Restart**.
+The switch turns off automatically. Open **Sign in to TIDAL** to link another
+account. If the browser remembers the previous account, sign out of TIDAL there
+first.
 
 For older plugin versions without this setting, stop Kalinka, delete
 `<state_dir>/tidal/session.json`, and start Kalinka again. Stop it before deleting
@@ -50,21 +55,25 @@ account on this player does not sign it out on other devices.
 
 ## Catalogs
 
+- **Home** exposes the recommendations and audio discovery sections returned
+  by TIDAL for your account and region.
 - **My Collection** exposes favorite tracks, albums, artists, and your created
   and saved playlists.
 - **My Mixes** exposes personalized mixes and their tracks.
 - Albums and playlists expose tracks; artists expose albums, EPs and singles,
   top tracks, and similar artists. Search supports all four entity types.
 
-The catalog starts with just My Collection and My Mixes. Home, Explore, Genres,
-and Moods are no longer listed; previously saved links to them still work.
+The catalog starts with Home, My Collection, and My Mixes. Explore, Genres,
+and Moods are not listed separately; previously saved links to them still work.
 
 Catalog IDs survive restarts. Discovery pages are cached for five minutes;
 album, playlist, search, and collection listings use TIDAL's pagination, capped
 at 50 items per request. Queue additions fetch successive pages up to the
 server's requested limit. A timeout or service failure aborts the addition;
 large cold requests may need retrying within the server's time budget.
-Search follows tidalapi's 300-result limit. Discovery
+Search combines all four entity kinds in one request, reusing the response for
+five seconds to stay within the server's call budget. It follows tidalapi's
+300-result limit. Discovery
 shelves expose the items returned by TIDAL and a further page when TIDAL supplies
 a supported `pages/` link. Videos, articles, and unsupported link types are omitted.
 No catalog filters are advertised; unsupported filters are rejected.
@@ -79,17 +88,24 @@ in the TIDAL app; Kalinka's own collections can still reference TIDAL tracks.
 
 ## Playback and limitations
 
-**Audio quality** in the plugin settings shows the automatic request: lossless
-FLAC, up to **16-bit / 44.1 kHz (CD quality)**. This is the highest tier currently
-supported by this integration, so there is no quality selector. TIDAL Max /
-hi-res playback is not implemented. Some tracks may be supplied at a lower
-quality; this setting describes the requested tier, not a measurement of the
-playing stream.
+**Maximum audio quality** offers:
+
+- **Lossless — 16-bit / 44.1 kHz**: requests `LOSSLESS`.
+- **Max — up to 24-bit / 192 kHz** (default): requests `HI_RES_LOSSLESS`.
+
+Apply and restart after changing quality. This controls the quality requested
+from TIDAL, not the format of the renderer's output. TIDAL chooses the actual
+codec, container and resolution for the track and session; the API does not offer
+an independent FLAC/MP3/WAV output-format selector. Device authorisation may
+return AAC even for a lossless request. AAC remains unsupported by the native
+renderer, and those tracks report an explicit playback error.
 
 The plugin resolves a fresh stream URL when a track starts playing. Direct,
-unencrypted FLAC and MP3 streams are supported. Segmented
-DASH, encrypted streams, and AAC/MP4 streams are rejected with a readable error;
-they require playback capabilities the native Kalinka renderer does not provide.
+unencrypted FLAC and MP3 streams are supported. DASH manifests are served to
+the renderer through Kalinka's content endpoint, with fresh signed segment URLs
+on each manifest request. Segmented FLAC requires a native renderer built with
+MPEG-DASH support; older renderers cannot play it. Encrypted and AAC streams
+remain unsupported.
 There is no transcoding or downloading of whole tracks.
 
 tidalapi is an unofficial client. Availability depends on the account, region,

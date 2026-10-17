@@ -66,7 +66,7 @@ jobs:
 
           Supports Debian 13 and Ubuntu 24.04 on ARM64 and amd64. Requires Kalinka Player 5.9.1 or newer (below 6), SDK 3.11 or newer (below 4), and Python 3.11 or newer.
 
-          Enable TIDAL, restart, and follow the sign-in link in the module status. Playback requires a TIDAL subscription and supports direct unencrypted FLAC/MP3 streams. Live account sign-in and playback have not been verified for this experimental release.
+          TIDAL is enabled by default. Open Sign in to TIDAL in the plugin settings and approve this player; Kalinka connects automatically. To change accounts, turn on Unlink Tidal and apply and restart. Maximum audio quality offers Lossless and Max, with Max selected by default. Playback requires a TIDAL subscription. Direct FLAC/MP3 streams are supported; segmented FLAC requires a renderer with MPEG-DASH support. AAC and encrypted streams remain unsupported.
           EOF
       - name: Publish package and checksum
         env:

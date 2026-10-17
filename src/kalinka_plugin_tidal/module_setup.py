@@ -3,11 +3,13 @@ from contextlib import suppress
 from pathlib import Path
 from typing import ClassVar
 
+import tidalapi
+
 from kalinka_plugin_sdk import DynamicFieldDecl, ModuleHealthState, ModuleState, paths
 from kalinka_plugin_sdk.plugin import InputModulePlugin, InputPluginContext
 
 from .client import TidalClient
-from .config_model import TidalConfig
+from .config_model import TidalAudioQuality, TidalConfig
 from .tidal import TidalInputModule
 
 
@@ -21,16 +23,6 @@ class KalinkaPluginTidal(InputModulePlugin):
             label="TIDAL account",
             widget="rich_text",
         ),
-        "audio_quality": DynamicFieldDecl(
-            section_id="",
-            label="Audio quality",
-            widget="rich_text",
-            help=(
-                "The highest quality supported by this plugin is requested "
-                "automatically. TIDAL Max / hi-res playback is not supported yet. "
-                "Some tracks may only be available in a lower quality."
-            ),
-        ),
     }
 
     def __init__(self):
@@ -43,7 +35,15 @@ class KalinkaPluginTidal(InputModulePlugin):
         session_path = Path(paths.state_dir()) / "tidal" / "session.json"
         if config.unpair:
             session_path.unlink(missing_ok=True)
-        self._client = TidalClient(session_path)
+            session_path.with_name("login.json").unlink(missing_ok=True)
+        self._client = TidalClient(
+            session_path,
+            quality=(
+                tidalapi.Quality.hi_res_lossless
+                if config.audio_quality == TidalAudioQuality.MAX
+                else tidalapi.Quality.high_lossless
+            ),
+        )
         self.interface = TidalInputModule(self._client)
         self._login_task = asyncio.create_task(self._client.authenticate())
 
@@ -56,8 +56,6 @@ class KalinkaPluginTidal(InputModulePlugin):
         return self._client.state
 
     async def resolve_dynamic_field(self, path: str):
-        if path == "audio_quality":
-            return "Lossless FLAC — up to 16-bit / 44.1 kHz (CD quality)."
         if path == "account_status":
             if self._client is None:
                 return "Enable TIDAL and restart to sign in."

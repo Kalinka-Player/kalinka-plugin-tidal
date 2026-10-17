@@ -133,8 +133,10 @@ async def test_device_login_updates_status_and_persists_after_authorization(clie
             await task
 
 
-async def test_restored_login_needs_no_device_authorization(client):
+@pytest.mark.parametrize("pkce", [False, True])
+async def test_restored_login_needs_no_device_authorization(client, pkce):
     signed_in(client)
+    client.session.is_pkce = pkce
     await client.run(lambda: None)
     client.ready = False
     client.session.load_oauth_session = Mock(return_value=True)

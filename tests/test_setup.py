@@ -10,7 +10,7 @@ import tidalapi
 from kalinka_plugin_sdk import ModuleHealthState, ModuleState, paths
 from kalinka_plugin_sdk.inputmodule import InputModule
 from kalinka_plugin_tidal.client import TidalClient
-from kalinka_plugin_tidal.config_model import TidalConfig
+from kalinka_plugin_tidal.config_model import TidalAudioQuality, TidalConfig
 from kalinka_plugin_tidal.module_setup import KalinkaPluginTidal
 
 
@@ -30,7 +30,7 @@ async def test_setup_returns_while_login_is_pending_and_shutdown_cancels_it(
 
     monkeypatch.setattr(TidalClient, "authenticate", pending_login)
     plugin = KalinkaPluginTidal()
-    await plugin.setup(SimpleNamespace(config=TidalConfig(enabled=True)))
+    await plugin.setup(SimpleNamespace(config=TidalConfig()))
     await asyncio.wait_for(started.wait(), 1)
     assert isinstance(plugin.get_interface(), InputModule)
     assert (await plugin.get_state()).state == ModuleHealthState.WARNING
@@ -53,6 +53,7 @@ async def test_forget_account_happens_before_authentication(
     if stored:
         session_path.parent.mkdir(parents=True)
         session_path.write_text("old-session")
+        session_path.with_name("login.json").write_text("old-challenge")
     started = asyncio.Event()
     observed = []
 
@@ -66,7 +67,8 @@ async def test_forget_account_happens_before_authentication(
         await plugin.setup(SimpleNamespace(config=TidalConfig(enabled=True, unpair=unpair)))
         await asyncio.wait_for(started.wait(), 1)
         assert observed == [stored and not unpair]
-        assert plugin._client.session.config.quality == tidalapi.Quality.high_lossless
+        assert session_path.with_name("login.json").exists() is (stored and not unpair)
+        assert plugin._client.session.config.quality == tidalapi.Quality.hi_res_lossless
     finally:
         await plugin.shutdown()
 
@@ -130,14 +132,12 @@ async def test_forgotten_account_can_be_replaced_and_restored(monkeypatch, tmp_p
         await restarted.shutdown()
 
 
-async def test_settings_show_sign_in_status_and_supported_quality():
+async def test_settings_show_device_sign_in_status():
     plugin = KalinkaPluginTidal()
     fields = plugin.DYNAMIC_FIELDS
     assert fields["account_status"].widget == "rich_text"
-    assert fields["audio_quality"].importance == "simple"
-    assert "hi-res playback is not supported" in fields["audio_quality"].help
+    assert "audio_quality" not in fields
     assert "restart to sign in" in await plugin.resolve_dynamic_field("account_status")
-    assert "16-bit / 44.1 kHz" in await plugin.resolve_dynamic_field("audio_quality")
     link = "[Sign in to TIDAL](https://link.tidal.com/EXAMPLE) to open your catalogs."
     plugin._client = SimpleNamespace(
         state=ModuleState(state=ModuleHealthState.WARNING, message=link)
@@ -152,5 +152,49 @@ async def test_settings_show_sign_in_status_and_supported_quality():
 def test_forget_account_is_an_opt_in_one_shot_setting():
     assert TidalConfig().unpair is False
     field = TidalConfig.model_fields["unpair"]
+    assert field.json_schema_extra["widget"] == "toggle"
     assert field.json_schema_extra["one_shot"] is True
     assert field.json_schema_extra["importance"] == "simple"
+
+
+@pytest.mark.parametrize("quality,requested", [
+    (TidalAudioQuality.LOSSLESS, tidalapi.Quality.high_lossless),
+    (TidalAudioQuality.MAX, tidalapi.Quality.hi_res_lossless),
+])
+async def test_quality_setting_reaches_tidal_stream_request(
+    monkeypatch, tmp_path, quality, requested
+):
+    monkeypatch.setenv("KALINKA_PREFIX", str(tmp_path))
+
+    async def authenticate(self):
+        self.ready = True
+
+    monkeypatch.setattr(TidalClient, "authenticate", authenticate)
+    plugin = KalinkaPluginTidal()
+    try:
+        await plugin.setup(SimpleNamespace(config=TidalConfig(audio_quality=quality)))
+        await plugin._login_task
+        session = plugin._client.session
+        track = tidalapi.Track(session)
+        track.id = 11
+        plugin.interface._entity = Mock(return_value=track)
+        session.request.request = Mock(return_value=SimpleNamespace(json=lambda: {
+            "trackId": 11, "audioQuality": requested,
+            "manifestMimeType": "application/dash+xml", "manifest": "",
+        }))
+        plugin.interface._dash_manifest = Mock(return_value=b"manifest")
+        await plugin.interface.get_track_source("11")
+        await plugin.interface.get_content_info("dash-11")
+        assert session.request.request.call_count == 2
+        for call in session.request.request.call_args_list:
+            assert call.args[2]["audioquality"] == requested
+    finally:
+        await plugin.shutdown()
+
+
+def test_obsolete_browser_settings_are_not_exposed_or_used():
+    config = TidalConfig(login_method="browser", login_response="private-response")
+    assert "login_method" not in config.model_dump()
+    assert "login_response" not in config.model_dump()
+    assert "private-response" not in repr(config)
+    assert config.audio_quality == TidalAudioQuality.MAX

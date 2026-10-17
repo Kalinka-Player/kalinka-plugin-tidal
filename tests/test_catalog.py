@@ -1,3 +1,7 @@
+import asyncio
+import base64
+import json
+import time
 from copy import copy
 from importlib.metadata import entry_points
 from types import SimpleNamespace
@@ -6,13 +10,14 @@ from unittest.mock import Mock
 import pytest
 import tidalapi
 from tidalapi.exceptions import ObjectNotFound
+from tidalapi.media import Stream
 from tidalapi.page import PageItem, PageLink
 
 from kalinka_plugin_sdk.datamodel import EntityId, EntityType
 from kalinka_plugin_sdk.filters import FilterQuery, UnsupportedFilter
 from kalinka_plugin_sdk.inputmodule import SearchType, SourceUnavailableError
 from kalinka_plugin_tidal.config_model import TidalConfig
-from kalinka_plugin_tidal.client import CatalogPage
+from kalinka_plugin_tidal.client import CatalogPage, TidalClient
 from kalinka_plugin_tidal.tidal import TidalInputModule, entity_id, route
 
 
@@ -28,15 +33,16 @@ def test_plugin_discovery():
     ).load()
     assert plugin.PLUGIN_ID == "tidal"
     assert plugin.CONFIG_MODEL is TidalConfig
-    assert not TidalConfig().enabled
+    assert TidalConfig().enabled
 
 
 async def test_root_is_paginated_and_available_before_sign_in(module):
     module.client.run = Mock(side_effect=AssertionError("No network for the root"))
     first = await module.browse(cat("root"), limit=1)
     rest = await module.browse(cat("root"), offset=1)
-    assert first.total == rest.total == 2
+    assert first.total == rest.total == 3
     assert [item.name for item in first.items + rest.items] == [
+        "Home",
         "My Collection",
         "My Mixes",
     ]
@@ -100,7 +106,9 @@ async def test_real_page_parsers_expose_catalogs_and_stable_routes(
         }
     page = CatalogPage(session, "").parse(data)
     session.home = Mock(return_value=page)
-    shelves = await module.browse(cat("home"))
+    home = next(item for item in (await module.browse(cat("root"))).items
+                if item.id == cat("home"))
+    shelves = await module.browse(home.id)
     assert [item.name for item in shelves.items] == ["New Releases"]
     shelf = shelves.items[0]
     assert EntityId.from_string(shelf.id.to_string) == shelf.id
@@ -247,8 +255,27 @@ async def test_artist_sections_use_the_corresponding_api(module, artist, album, 
     artist.get_similar.assert_called_once_with()
 
 
+async def test_album_response_includes_flags_required_by_existing_apps(module, album, track):
+    album.num_tracks = 1
+    album.tracks = Mock(return_value=[track])
+    item = module._item(album)
+    result = await module.browse(item.id, filter=FilterQuery({}))
+    payload = result.model_dump(mode="json", exclude_unset=True)
+    assert payload["items"][0]["can_browse"] is False
+    assert payload["items"][0]["can_add"] is True
+    assert payload["items"][0]["track"]["id"] == "kalinka:tidal:track:11"
+    assert await module.tracks_to_add(item.id, 50) == [track_id := result.items[0].id]
+    assert (await module.get(track_id)).track.title == payload["items"][0]["track"]["title"]
+
+
+def test_artist_response_includes_flags_required_by_existing_apps(module, artist):
+    payload = module._item(artist).model_dump(mode="json", exclude_unset=True)
+    assert payload["can_add"] is False
+    assert payload["can_browse"] is True
+
+
 @pytest.mark.parametrize("kind", list(SearchType))
-async def test_search_selects_one_model_and_paginates(
+async def test_search_selects_requested_kind_and_paginates(
     module, session, kind, album, track, artist, playlist
 ):
     item = {"album": album, "track": track, "artist": artist, "playlist": playlist}[
@@ -259,13 +286,45 @@ async def test_search_selects_one_model_and_paginates(
     assert result.total == 52
     assert result.items[0].id.type.value == kind.value
     assert session.search.call_args.kwargs == {
-        "models": [getattr(tidalapi, kind.value.capitalize())],
+        "models": [tidalapi.Track, tidalapi.Album, tidalapi.Artist, tidalapi.Playlist],
         "offset": 50,
         "limit": 1,
     }
     assert (await module.search(kind, "", offset=0)).total == 0
     assert (await module.search(kind, "Music", offset=300)).total == 0
     assert session.search.call_count == 1
+
+
+async def test_concurrent_search_kinds_share_one_upstream_request(tmp_path, track, album, artist, playlist):
+    client = TidalClient(tmp_path / "session.json")
+    client.ready = True
+    module = TidalInputModule(client)
+
+    def search(*args, **kwargs):
+        time.sleep(0.85)
+        return {"tracks": [track], "albums": [album], "artists": [artist], "playlists": [playlist]}
+
+    client.session.search = Mock(side_effect=search)
+    try:
+        results = await asyncio.gather(*(module.search(kind, "Music") for kind in SearchType))
+        assert [result.items[0].id.type.value for result in results] == [kind.value for kind in SearchType]
+        client.session.search.assert_called_once()
+    finally:
+        await client.close()
+
+
+async def test_search_cache_expires_and_is_scoped_to_account_and_page(module, session, track):
+    session.search = Mock(return_value={"tracks": [track]})
+    await module.search(SearchType.track, "Music", limit=1)
+    key = ("search", "Music", 0, 1)
+    expires, data = module._cache[key]
+    assert 0 < expires - time.monotonic() <= 5
+    module._cache[key] = (0, data)
+    await module.search(SearchType.track, "Music", limit=1)
+    await module.search(SearchType.track, "Music", offset=1, limit=1)
+    session.user = SimpleNamespace(id=2)
+    await module.search(SearchType.track, "Music", limit=1)
+    assert session.search.call_count == 4
 
 
 async def test_collection_uses_paged_library_calls(module, session, track, playlist):
@@ -309,6 +368,7 @@ async def test_track_queueing_is_lazy_and_stream_urls_are_resolved_each_time(
 ):
     stream = SimpleNamespace(
         is_bts=True,
+        is_mpd=False,
         get_stream_manifest=Mock(
             return_value=SimpleNamespace(
                 encryption_type="NONE",
@@ -428,6 +488,7 @@ async def test_unsupported_streams_fail_clearly(
     track.get_stream = Mock(
         return_value=SimpleNamespace(
             is_bts=bts,
+            is_mpd=False,
             get_stream_manifest=lambda: SimpleNamespace(
                 encryption_type=encryption,
                 codecs=codec,
@@ -438,6 +499,49 @@ async def test_unsupported_streams_fail_clearly(
     module._item(track)
     with pytest.raises(SourceUnavailableError):
         await module.get_track_source("11")
+
+
+@pytest.mark.parametrize("codec,quality", [("flac", "LOSSLESS"), ("mp3", "HIGH")])
+async def test_real_bts_manifest_returns_renderer_format(module, session, track, codec, quality):
+    payload = {
+        "mimeType": "audio/flac" if codec == "flac" else "audio/mpeg",
+        "codecs": codec,
+        "encryptionType": "NONE",
+        "urls": [f"https://cdn.example/audio.{codec}?token=private"],
+    }
+    response = {
+        "trackId": 11, "audioQuality": quality,
+        "manifestMimeType": "application/vnd.tidal.bts",
+        "manifest": base64.b64encode(json.dumps(payload).encode()).decode(),
+    }
+    session.request.request = Mock(return_value=SimpleNamespace(json=lambda: response))
+    module._item(track)
+    source = await module.get_track_source("11")
+    assert source.format == codec
+    assert source.source.url == payload["urls"][0]
+    assert session.request.request.call_args.args[2]["audioquality"] == session.config.quality
+
+
+@pytest.mark.parametrize("codec", ["AAC", "mp4a.40.2"])
+@pytest.mark.parametrize("pkce", [True, False])
+async def test_real_aac_manifest_explains_quality_and_renderer_limitations(module, session, track, codec, pkce):
+    session.is_pkce = pkce
+    payload = {
+        "mimeType": "audio/mp4", "codecs": codec, "encryptionType": "NONE",
+        "urls": ["https://cdn.example/audio.m4a?token=private"],
+    }
+    stream = Stream().parse({
+        "trackId": 11, "audioQuality": "HIGH",
+        "manifestMimeType": "application/vnd.tidal.bts",
+        "manifest": base64.b64encode(json.dumps(payload).encode()).decode(),
+    })
+    track.get_stream = Mock(return_value=stream)
+    module._item(track)
+    with pytest.raises(SourceUnavailableError, match="AAC") as caught:
+        await module.get_track_source("11")
+    assert "selected quality is a request" in str(caught.value)
+    assert "Browser sign-in" not in str(caught.value)
+    assert "private" not in str(caught.value)
 
 
 @pytest.mark.parametrize(
