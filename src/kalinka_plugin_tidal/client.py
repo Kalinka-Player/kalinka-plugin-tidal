@@ -8,6 +8,7 @@ import os
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -38,17 +39,27 @@ for _name in (
     logging.getLogger(_name).addFilter(_PrivateSessionLogs())
 
 
+class _Refused(Exception):
+    """TIDAL answered 401 for an item, but the session itself is valid."""
+
+
 class BoundedSession(requests.Session):
     """tidalapi also makes auth requests directly through this transport."""
 
     deadline = float("inf")
+    # tidalapi raises AuthenticationError for any failed token refresh. The
+    # status tells a rejected refresh token from an auth server outage.
+    token_status = None
 
     def request(self, method, url, **kwargs):
         remaining = self.deadline - time.monotonic()
         if remaining <= 0:
             raise requests.Timeout("TIDAL request timed out")
         kwargs["timeout"] = (min(0.5, remaining), min(1.5, remaining))
-        return super().request(method, url, **kwargs)
+        response = super().request(method, url, **kwargs)
+        if urlsplit(url).path.endswith("/oauth2/token"):
+            self.token_status = response.status_code
+        return response
 
 
 class CatalogPlaylist(tidalapi.Playlist):
@@ -83,8 +94,18 @@ class CatalogSession(tidalapi.Session):
     def playlist(self, playlist_id=None):
         return CatalogPlaylist(self, playlist_id)
 
+    def token_refresh(self, refresh_token):
+        try:
+            return super().token_refresh(refresh_token)
+        except KeyError:
+            # Error replies without "error" fields still fail the refresh.
+            raise AuthenticationError("TIDAL token refresh failed") from None
+
 
 class TidalClient:
+    # Notice a revoked or expired sign-in even while nobody browses TIDAL.
+    session_check_interval = 600
+
     def __init__(self, session_path: Path, *, quality=tidalapi.Quality.hi_res_lossless):
         self.session_path = session_path
         self.session = CatalogSession(
@@ -101,6 +122,8 @@ class TidalClient:
         self._closed = False
         self._reauthenticate = asyncio.Event()
         self.ready = False
+        self.expired = False
+        self._awaiting_approval = False
         self.state = ModuleState(
             state=ModuleHealthState.WARNING, message="Connecting to TIDAL…"
         )
@@ -109,15 +132,36 @@ class TidalClient:
         if self._closed:
             raise SourceUnavailableError("TIDAL is shutting down.")
         if authenticated and not self.ready:
+            if not self._awaiting_approval:
+                raise SourceUnavailableError(
+                    "TIDAL is connecting. Try again shortly."
+                )
+            if self.expired:
+                raise SourceUnavailableError(
+                    "TIDAL sign-in expired. Sign in again in the module's status."
+                )
             raise SourceUnavailableError("Sign in to TIDAL in the module's status.")
         deadline = time.monotonic() + timeout
 
         def invoke():
             self.session.request_session.deadline = deadline
+            self.session.request_session.token_status = None
             if time.monotonic() >= deadline:
                 raise requests.Timeout("TIDAL request timed out")
             try:
-                return operation()
+                try:
+                    return operation()
+                except requests.HTTPError as error:
+                    if getattr(error.response, "status_code", None) != 401:
+                        raise
+                    # TIDAL also answers 401 for items this account cannot
+                    # play. Only a session it rejects too has expired.
+                    self._check_session()
+                    raise _Refused() from None
+            except AuthenticationError as error:
+                # Read the status here: the next queued call resets it.
+                error.token_status = self.session.request_session.token_status
+                raise
             finally:
                 # Refresh can succeed before the catalog request fails. Keep
                 # rotated credentials even when that request returns an error.
@@ -128,12 +172,26 @@ class TidalClient:
             return await asyncio.wait_for(future, timeout)
         except ObjectNotFound:
             raise LookupError("This item is no longer available on TIDAL.") from None
+        except _Refused:
+            raise SourceUnavailableError(
+                "TIDAL does not allow this account to play or open this item."
+            ) from None
         except (AuthenticationError, requests.HTTPError) as error:
             response = getattr(error, "response", None)
-            if isinstance(error, AuthenticationError) or (
-                response is not None and response.status_code == 401
+            status = (
+                getattr(error, "token_status", None)
+                if isinstance(error, AuthenticationError)
+                else getattr(response, "status_code", None)
+            )
+            if isinstance(error, AuthenticationError) and (
+                status is not None and (status >= 500 or status == 429)
             ):
+                raise SourceUnavailableError(
+                    "TIDAL is temporarily unavailable. Try again."
+                ) from None
+            if isinstance(error, AuthenticationError) or status == 401:
                 self.ready = False
+                self.expired = True
                 self._reauthenticate.set()
                 self.state = ModuleState(
                     state=ModuleHealthState.WARNING,
@@ -190,9 +248,14 @@ class TidalClient:
         # Also reads files produced by tidalapi.Session.save_session_to_file.
         return self.session.load_oauth_session(**args)
 
+    def _check_session(self):
+        # Refreshes an expired access token; raises if TIDAL rejects the sign-in.
+        self.session.request.request("GET", "sessions")
+
     async def authenticate(self):
         """Restore a saved session or wait for device authorisation."""
         while True:
+            self._awaiting_approval = False
             try:
                 try:
                     self.ready = await self.run(
@@ -213,13 +276,16 @@ class TidalClient:
                     host = urlsplit(url).hostname or ""
                     if host != "tidal.com" and not host.endswith(".tidal.com"):
                         raise ValueError("Unexpected TIDAL sign-in address")
+                    message = (
+                        "TIDAL sign-in expired or was revoked. "
+                        f"[Sign in to TIDAL]({url}) again"
+                        if self.expired
+                        else f"[Sign in to TIDAL]({url})"
+                    ) + " and approve this player. Kalinka will connect automatically."
                     self.state = ModuleState(
-                        state=ModuleHealthState.WARNING,
-                        message=(
-                            f"[Sign in to TIDAL]({url}) and approve this player. "
-                            "Kalinka will connect automatically."
-                        ),
+                        state=ModuleHealthState.WARNING, message=message
                     )
+                    self._awaiting_approval = True
                     expires = time.monotonic() + login.expires_in
                     # The library's one-shot poll sleeps before raising
                     # TimeoutError while authorization is pending. Keep that
@@ -242,13 +308,25 @@ class TidalClient:
                             break
                     if not self.ready:
                         continue  # Replace an expired link with a fresh one.
+                self.expired = False
+                self._awaiting_approval = False
                 self.state = ModuleState(state=ModuleHealthState.READY)
-                await self._reauthenticate.wait()
+                while not self._reauthenticate.is_set():
+                    try:
+                        await asyncio.wait_for(
+                            self._reauthenticate.wait(), self.session_check_interval
+                        )
+                    except TimeoutError:
+                        # A rejected sign-in sets _reauthenticate. Outages
+                        # leave the session in place until the next check.
+                        with suppress(SourceUnavailableError, LookupError):
+                            await self.run(self._check_session, timeout=7)
             except asyncio.CancelledError:
                 raise
             except Exception:
                 # No exception repr: upstream errors may contain credentials.
                 self.ready = False
+                self._awaiting_approval = False
                 self.state = ModuleState(
                     state=ModuleHealthState.ERROR,
                     message="Could not connect to TIDAL or save its session. Retrying shortly.",

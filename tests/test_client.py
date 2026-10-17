@@ -97,9 +97,20 @@ async def test_library_session_files_without_expiry_are_supported(client):
 
 async def test_not_signed_in_fails_without_making_a_request(client):
     work = Mock()
+    with pytest.raises(SourceUnavailableError, match="connecting"):
+        await client.run(work)
+    client._awaiting_approval = True
     with pytest.raises(SourceUnavailableError, match="Sign in"):
         await client.run(work)
     work.assert_not_called()
+
+
+async def test_reconnecting_after_a_rejected_request_does_not_ask_to_sign_in(client):
+    client.ready = True
+    with pytest.raises(SourceUnavailableError):
+        await client.run(Mock(side_effect=AuthenticationError()))
+    with pytest.raises(SourceUnavailableError, match="connecting"):
+        await client.run(Mock())
 
 
 async def test_device_login_updates_status_and_persists_after_authorization(client):
@@ -162,6 +173,160 @@ async def test_revoked_session_starts_reauthentication(client):
     assert not client.ready
     assert client._reauthenticate.is_set()
     assert "sensitive" not in client.state.message
+
+
+async def wait_for_state(client, state, text=""):
+    async with asyncio.timeout(3):
+        while client.state.state != state or text not in (client.state.message or ""):
+            await asyncio.sleep(0.01)
+
+
+async def test_expired_sign_in_warns_until_the_player_is_approved_again(client):
+    signed_in(client)
+    await client.run(lambda: None)
+    client.ready = False
+    client.session.load_oauth_session = Mock(
+        side_effect=AuthenticationError("private-refresh rejected")
+    )
+    link = SimpleNamespace(
+        verification_uri_complete="link.tidal.com/AGAIN", expires_in=30, interval=0
+    )
+    client.session.get_link_login = Mock(return_value=link)
+    approved = threading.Event()
+
+    def authorize(*args, **kwargs):
+        if not approved.is_set():
+            raise TimeoutError
+        signed_in(client)
+        return True
+
+    client.session.process_link_login = Mock(side_effect=authorize)
+    task = asyncio.create_task(client.authenticate())
+    try:
+        await wait_for_state(client, ModuleHealthState.WARNING, "sign-in expired")
+        assert "https://link.tidal.com/AGAIN" in client.state.message
+        assert "private" not in client.state.message
+        with pytest.raises(SourceUnavailableError, match="expired. Sign in again"):
+            await client.run(lambda: None)
+        approved.set()
+        await wait_for_state(client, ModuleHealthState.READY)
+        assert client.ready and not client.expired
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+
+async def test_idle_session_check_notices_a_revoked_sign_in(client):
+    signed_in(client)
+    await client.run(lambda: None)
+    client.ready = False
+    client.session_check_interval = 0.01
+    client.session.load_oauth_session = Mock(return_value=True)
+    client.session.request.request = Mock(return_value=None)
+    link = SimpleNamespace(
+        verification_uri_complete="link.tidal.com/AGAIN", expires_in=30, interval=0
+    )
+    client.session.get_link_login = Mock(return_value=link)
+    client.session.process_link_login = Mock(side_effect=TimeoutError)
+    task = asyncio.create_task(client.authenticate())
+    try:
+        await wait_for_state(client, ModuleHealthState.READY)
+        async with asyncio.timeout(2):
+            while not client.session.request.request.called:
+                await asyncio.sleep(0.01)
+        client.session.load_oauth_session.side_effect = AuthenticationError()
+        client.session.request.request.side_effect = AuthenticationError()
+        await wait_for_state(client, ModuleHealthState.WARNING, "[Sign in to TIDAL]")
+        assert "sign-in expired" in client.state.message
+        assert not client.ready
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+
+async def test_idle_session_check_outage_keeps_the_sign_in(client):
+    signed_in(client)
+    await client.run(lambda: None)
+    client.ready = False
+    client.session_check_interval = 0.01
+    client.session.load_oauth_session = Mock(return_value=True)
+    client.session.request.request = Mock(side_effect=requests.ConnectionError())
+    client.session.get_link_login = Mock(
+        side_effect=AssertionError("No new login needed")
+    )
+    task = asyncio.create_task(client.authenticate())
+    try:
+        await wait_for_state(client, ModuleHealthState.READY)
+        async with asyncio.timeout(2):
+            while client.session.request.request.call_count < 2:
+                await asyncio.sleep(0.01)
+        assert client.ready
+        assert client.state.state == ModuleHealthState.READY
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+
+def unauthorized():
+    response = requests.Response()
+    response.status_code = 401
+    response._content = b'{"subStatus": 4005, "userMessage": "secret"}'
+    return requests.HTTPError("secret", response=response)
+
+
+async def test_refused_item_does_not_expire_a_valid_sign_in(client):
+    signed_in(client)
+    client.session.request.request = Mock(return_value=None)
+    with pytest.raises(SourceUnavailableError, match="does not allow") as caught:
+        await client.run(Mock(side_effect=unauthorized()))
+    assert "secret" not in str(caught.value)
+    client.session.request.request.assert_called_once_with("GET", "sessions")
+    assert client.ready and not client.expired
+    assert not client._reauthenticate.is_set()
+
+
+async def test_unauthorized_item_and_session_expire_the_sign_in(client):
+    signed_in(client)
+    client.session.request.request = Mock(side_effect=unauthorized())
+    with pytest.raises(SourceUnavailableError, match="sign-in expired"):
+        await client.run(Mock(side_effect=unauthorized()))
+    assert not client.ready and client.expired
+    assert client._reauthenticate.is_set()
+
+
+def token_reply(monkeypatch, status):
+    def reply(session, method, url, **kwargs):
+        assert url == "https://auth.tidal.com/v1/oauth2/token"
+        response = requests.Response()
+        response.status_code = status
+        response._content = b'{"error": "secret", "error_description": "secret"}'
+        return response
+
+    monkeypatch.setattr(requests.Session, "request", reply)
+
+
+@pytest.mark.parametrize("status", [429, 500, 503])
+async def test_auth_server_outage_keeps_the_sign_in(client, monkeypatch, status):
+    signed_in(client)
+    token_reply(monkeypatch, status)
+    with pytest.raises(SourceUnavailableError, match="temporarily") as caught:
+        await client.run(lambda: client.session.token_refresh("private-refresh"))
+    assert "secret" not in str(caught.value)
+    assert client.ready and not client.expired
+    assert not client._reauthenticate.is_set()
+
+
+@pytest.mark.parametrize("status", [400, 401])
+async def test_rejected_refresh_token_expires_the_sign_in(client, monkeypatch, status):
+    signed_in(client)
+    token_reply(monkeypatch, status)
+    with pytest.raises(SourceUnavailableError, match="sign-in expired"):
+        await client.run(lambda: client.session.token_refresh("private-refresh"))
+    assert not client.ready and client.expired
+    assert client._reauthenticate.is_set()
 
 
 @pytest.mark.parametrize(

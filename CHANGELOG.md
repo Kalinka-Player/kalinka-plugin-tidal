@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Warn when TIDAL rejects the saved sign-in and offer a new sign-in link that
+  says the sign-in expired, instead of the first-time prompt. Browsing reports
+  the expiry too. The session is checked every 10 minutes, so an idle player
+  notices revocation. An outage of TIDAL's sign-in server keeps the sign-in,
+  and browsing during a reconnect says TIDAL is connecting. A track TIDAL
+  refuses to play reports the refusal instead of interrupting the sign-in.
+
 ## 0.2.0
 
 - Require Kalinka Player 5.11.0 or newer (below 6). AAC, MP4 and segmented

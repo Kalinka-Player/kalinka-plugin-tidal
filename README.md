@@ -32,6 +32,11 @@ If the status still says "Connecting", reopen the Plugins screen to refresh it.
 Expired links are replaced automatically. Existing valid sessions remain signed
 in until you reset authorisation, including sessions from earlier browser sign-in.
 
+If TIDAL ends the session, for example after a password change or signing out
+of all devices, the plugin shows a warning that the sign-in expired, with a
+new **Sign in to TIDAL** link. Kalinka checks the session every 10 minutes and
+whenever TIDAL is browsed or played. Approving the link reconnects without a restart.
+
 No password or developer API key is required in Kalinka's settings. Playback
 requires a TIDAL streaming subscription. An explicitly saved disabled setting
 is respected; enable TIDAL and restart if you previously disabled it.
