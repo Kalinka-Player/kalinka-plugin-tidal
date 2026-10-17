@@ -246,6 +246,29 @@ async def test_idle_session_check_notices_a_revoked_sign_in(client):
             await task
 
 
+async def test_session_in_use_is_not_checked_until_idle(client):
+    signed_in(client)
+    await client.run(lambda: None)
+    client.ready = False
+    client.session_check_interval = 0.2
+    client.session.load_oauth_session = Mock(return_value=True)
+    client.session.request.request = Mock(return_value=None)
+    task = asyncio.create_task(client.authenticate())
+    try:
+        await wait_for_state(client, ModuleHealthState.READY)
+        for _ in range(10):
+            await client.run(lambda: None)
+            await asyncio.sleep(0.05)
+        client.session.request.request.assert_not_called()
+        async with asyncio.timeout(2):
+            while not client.session.request.request.called:
+                await asyncio.sleep(0.01)
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+
 async def test_idle_session_check_outage_keeps_the_sign_in(client):
     signed_in(client)
     await client.run(lambda: None)

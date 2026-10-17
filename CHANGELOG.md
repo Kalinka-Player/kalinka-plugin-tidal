@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Ask TIDAL for an empty page a second time before ending an album or
+  playlist add early, so a one-off empty reply does not cut the add short.
+- Check only an idle TIDAL session every 10 minutes; successful requests
+  already show that the sign-in is valid.
+
 ## 0.2.1
 
 - Warn when TIDAL rejects the saved sign-in and offer a new sign-in link that
