@@ -57,14 +57,13 @@ account on this player does not sign it out on other devices.
 
 - **Home** exposes the recommendations and audio discovery sections returned
   by TIDAL for your account and region.
+- **Explore**, **Genres** and **Moods** expose TIDAL's pages of the same names,
+  with their shelves and the pages those link to.
 - **My Collection** exposes favorite tracks, albums, artists, and your created
   and saved playlists.
 - **My Mixes** exposes personalized mixes and their tracks.
 - Albums and playlists expose tracks; artists expose albums, EPs and singles,
   top tracks, and similar artists. Search supports all four entity types.
-
-The catalog starts with Home, My Collection, and My Mixes. Explore, Genres,
-and Moods are not listed separately; previously saved links to them still work.
 
 Catalog IDs survive restarts. Discovery pages are cached for five minutes;
 album, playlist, search, and collection listings use TIDAL's pagination, capped

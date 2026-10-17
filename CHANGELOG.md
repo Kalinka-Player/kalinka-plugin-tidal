@@ -16,8 +16,8 @@
 - Play AAC and MP4 streams, direct or segmented, as `audio/mp4`. Requires a
   renderer with AAC support. Other codecs are refused, naming the codec.
   Test direct FLAC/MP3/AAC responses through tidalapi's real manifest parser.
-- Restore Home and its audio discovery sections alongside My Collection and
-  My Mixes.
+- Restore Home, Explore, Genres and Moods with their shelves alongside
+  My Collection and My Mixes.
 - Enable TIDAL by default so the installation restart also starts sign-in,
   without a second restart to enable the plugin. Explicit disable settings
   remain respected.
