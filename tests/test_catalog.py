@@ -451,6 +451,15 @@ async def test_tracks_tidal_no_longer_lists_do_not_fail_the_add(
     assert [eid.id for eid in ids] == [str(row.id) for row in rows]
 
 
+async def test_one_off_empty_page_does_not_cut_the_add_short(module, playlist, track):
+    rows = numbered_tracks(track, 80)
+    playlist.num_tracks = len(rows)
+    playlist.tracks = Mock(side_effect=[rows[:50], [], rows[50:]])
+    item = module._item(playlist)
+    ids = await module.tracks_to_add(item.id, 5000)
+    assert [eid.id for eid in ids] == [str(row.id) for row in rows]
+
+
 async def test_unplayable_listed_tracks_are_still_added(module, album, track):
     track.available = False
     album.num_tracks = 1

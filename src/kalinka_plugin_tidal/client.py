@@ -124,6 +124,7 @@ class TidalClient:
         self.ready = False
         self.expired = False
         self._awaiting_approval = False
+        self._verified_at = 0.0
         self.state = ModuleState(
             state=ModuleHealthState.WARNING, message="Connecting to TIDAL…"
         )
@@ -169,7 +170,10 @@ class TidalClient:
 
         try:
             future = asyncio.get_running_loop().run_in_executor(self._executor, invoke)
-            return await asyncio.wait_for(future, timeout)
+            result = await asyncio.wait_for(future, timeout)
+            if authenticated:
+                self._verified_at = time.monotonic()
+            return result
         except ObjectNotFound:
             raise LookupError("This item is no longer available on TIDAL.") from None
         except _Refused:
@@ -310,17 +314,27 @@ class TidalClient:
                         continue  # Replace an expired link with a fresh one.
                 self.expired = False
                 self._awaiting_approval = False
+                self._verified_at = time.monotonic()
                 self.state = ModuleState(state=ModuleHealthState.READY)
                 while not self._reauthenticate.is_set():
-                    try:
-                        await asyncio.wait_for(
-                            self._reauthenticate.wait(), self.session_check_interval
-                        )
-                    except TimeoutError:
-                        # A rejected sign-in sets _reauthenticate. Outages
-                        # leave the session in place until the next check.
-                        with suppress(SourceUnavailableError, LookupError):
-                            await self.run(self._check_session, timeout=7)
+                    # A successful request also shows the session is valid,
+                    # so only a session idle for a whole interval is checked.
+                    remaining = (
+                        self._verified_at
+                        + self.session_check_interval
+                        - time.monotonic()
+                    )
+                    if remaining > 0:
+                        with suppress(TimeoutError):
+                            await asyncio.wait_for(
+                                self._reauthenticate.wait(), remaining
+                            )
+                        continue
+                    # Outages also wait an interval before the next check.
+                    # A rejected sign-in sets _reauthenticate.
+                    self._verified_at = time.monotonic()
+                    with suppress(SourceUnavailableError, LookupError):
+                        await self.run(self._check_session, timeout=7)
             except asyncio.CancelledError:
                 raise
             except Exception:

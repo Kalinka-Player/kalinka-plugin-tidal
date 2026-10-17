@@ -490,10 +490,14 @@ class TidalInputModule(InputModule):
             tracks = []
             offset = 0
             while len(tracks) < limit:
-                page = self._browse(entity_id, offset, min(MAX_LIMIT, limit - len(tracks)))
-                if not page.items:
+                size = min(MAX_LIMIT, limit - len(tracks))
+                page = self._browse(entity_id, offset, size)
+                if not page.items and offset < page.total:
                     # Track counts include tracks TIDAL no longer lists, so
-                    # the list can end before the advertised total.
+                    # the list can end before the advertised total. Ask
+                    # again so a one-off empty reply does not end it early.
+                    page = self._browse(entity_id, offset, size)
+                if not page.items:
                     break
                 for item in page.items:
                     if item.track is not None:
@@ -512,7 +516,7 @@ class TidalInputModule(InputModule):
             return tracks
 
         # All pages share one deadline; a request failure aborts the add.
-        # Only a list that ends early (see above) is added as returned.
+        # Only a list that is empty twice in a row ends early (see above).
         return await self.client.run(expand)
 
     def _browse(self, eid, offset, limit):

@@ -34,8 +34,10 @@ in until you reset authorisation, including sessions from earlier browser sign-i
 
 If TIDAL ends the session, for example after a password change or signing out
 of all devices, the plugin shows a warning that the sign-in expired, with a
-new **Sign in to TIDAL** link. Kalinka checks the session every 10 minutes and
-whenever TIDAL is browsed or played. Approving the link reconnects without a restart.
+new **Sign in to TIDAL** link. Kalinka notices when TIDAL is browsed or played,
+and checks an idle session every 10 minutes. TIDAL may accept the current
+sign-in for a while after it is ended elsewhere; the warning appears once TIDAL
+rejects it. Approving the link reconnects without a restart.
 
 No password or developer API key is required in Kalinka's settings. Playback
 requires a TIDAL streaming subscription. An explicitly saved disabled setting
