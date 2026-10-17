@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.2
 
 - Ask TIDAL for an empty page a second time before ending an album or
   playlist add early, so a one-off empty reply does not cut the add short.
