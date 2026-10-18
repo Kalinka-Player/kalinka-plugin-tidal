@@ -15,7 +15,11 @@ from tidalapi.page import PageItem, PageLink
 
 from kalinka_plugin_sdk.datamodel import EntityId, EntityType
 from kalinka_plugin_sdk.filters import FilterQuery, UnsupportedFilter
-from kalinka_plugin_sdk.inputmodule import SearchType, SourceUnavailableError
+from kalinka_plugin_sdk.inputmodule import (
+    ModuleCapability,
+    SearchType,
+    SourceUnavailableError,
+)
 from kalinka_plugin_tidal.config_model import TidalConfig
 from kalinka_plugin_tidal.client import CatalogPage, TidalClient
 from kalinka_plugin_tidal.tidal import TidalInputModule, entity_id, route
@@ -34,6 +38,10 @@ def test_plugin_discovery():
     assert plugin.PLUGIN_ID == "tidal"
     assert plugin.CONFIG_MODEL is TidalConfig
     assert TidalConfig().enabled
+
+
+def test_tidal_offers_its_catalogs_as_a_home_source(module):
+    assert module.capabilities() == frozenset({ModuleCapability.CATALOGS})
 
 
 async def test_root_is_paginated_and_available_before_sign_in(module):

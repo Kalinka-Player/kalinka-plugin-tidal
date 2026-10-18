@@ -20,7 +20,8 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
-    "kalinka-plugin-sdk>=3.11,<4",
+    # 3.14: ModuleCapability.CATALOGS, which offers TIDAL as a home source.
+    "kalinka-plugin-sdk>=3.14,<4",
     "tidalapi>=0.8.11,<0.9",
 ]
 

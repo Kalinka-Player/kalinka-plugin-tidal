@@ -28,7 +28,7 @@ def inspect(path: Path):
     assert fields["Architecture"] == "all"
     assert "kalinka-server (>= 5.11.0)" in fields["Depends"]
     assert "kalinka-server (<< 6)" in fields["Depends"]
-    assert "kalinka-plugin-sdk (>= 3.11)" in fields["Depends"]
+    assert "kalinka-plugin-sdk (>= 3.14)" in fields["Depends"]
     assert "kalinka-plugin-sdk (<< 4)" in fields["Depends"]
     assert "python3 (>= 3.11)" in fields["Depends"]
     data = subprocess.check_output(["dpkg-deb", "--fsys-tarfile", str(path)])
