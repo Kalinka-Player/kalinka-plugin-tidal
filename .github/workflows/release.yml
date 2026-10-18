@@ -64,7 +64,7 @@ jobs:
           sudo apt install ./kalinka-plugin-tidal_${VERSION}_all.deb
           \`\`\`
 
-          Supports Debian 13 and Ubuntu 24.04 on ARM64 and amd64. Requires Kalinka Player 5.11.0 or newer (below 6), SDK 3.11 or newer (below 4), and Python 3.11 or newer. AAC, MP4 and segmented streams play on Kalinka renderer 0.10.0 or newer.
+          Supports Debian 13 and Ubuntu 24.04 on ARM64 and amd64. Requires Kalinka Player 5.11.0 or newer (below 6), SDK 3.14 or newer (below 4), and Python 3.11 or newer. AAC, MP4 and segmented streams play on Kalinka renderer 0.10.0 or newer.
 
           TIDAL is enabled by default. Open Sign in to TIDAL in the plugin settings and approve this player; Kalinka connects automatically. To change accounts, turn on Unlink Tidal and apply and restart. Maximum audio quality offers Lossless and Max, with Max selected by default. Playback requires a TIDAL subscription. Direct and segmented FLAC, AAC and MP3 streams are supported; encrypted streams are not. Home, Explore, Genres, Moods, My Mixes and My Collection are listed at the top level.
           EOF

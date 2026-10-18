@@ -40,6 +40,7 @@ from kalinka_plugin_sdk.inputmodule import (
     DirectUrl,
     InputModule,
     ModuleAsset,
+    ModuleCapability,
     SearchType,
     SourceUnavailableError,
     TrackInfo,
@@ -210,6 +211,9 @@ class TidalInputModule(InputModule):
 
     def display_name(self):
         return "TIDAL"
+
+    def capabilities(self) -> frozenset[ModuleCapability]:
+        return frozenset({ModuleCapability.CATALOGS})
 
     def _remember(self, key, value, *, ttl=300):
         self._check_account()
