@@ -200,9 +200,9 @@ async def test_nested_genre_links_and_promotions_are_lazy(module, session, album
         session,
         {
             "title": "Jazz",
-            "icon": None,
+            "icon": "jazz",
             "apiPath": "pages/genre/jazz",
-            "imageId": "abc-def",
+            "imageId": "jazz",
         },
     )
     promotion = PageItem(
@@ -226,7 +226,10 @@ async def test_nested_genre_links_and_promotions_are_lazy(module, session, album
     section = (await module.browse(cat("genres"))).items[0]
     result = await module.browse(section.id)
     assert [item.name for item in result.items] == ["Jazz", "New"]
-    assert result.items[0].catalog.image.large.endswith("640x640.jpg")
+    assert result.items[0].catalog.image is None
+    assert result.items[1].catalog.image.large == (
+        "https://resources.tidal.com/images/abc/def/1100x800.jpg"
+    )
     album.tracks = Mock(return_value=[])
     session.album = Mock(return_value=album)
     await module.browse(result.items[1].id)

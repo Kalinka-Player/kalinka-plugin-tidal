@@ -152,14 +152,19 @@ def cover(item):
         return None
 
 
-def image_id_cover(value):
+def promotion_cover(value):
     if not value:
         return None
     path = str(value).replace("-", "/")
+    # Promotion banners exist only in these landscape sizes; square ones 403.
     return CoverImage(
         **{
-            key: f"https://resources.tidal.com/images/{path}/{size}x{size}.jpg"
-            for key, size in (("small", 320), ("thumbnail", 320), ("large", 640))
+            key: f"https://resources.tidal.com/images/{path}/{size}.jpg"
+            for key, size in (
+                ("small", "550x400"),
+                ("thumbnail", "550x400"),
+                ("large", "1100x800"),
+            )
         }
     )
 
@@ -354,12 +359,9 @@ class TidalInputModule(InputModule):
                 path = page_path(item.api_path)
             except LookupError:
                 return None
-            return catalog(
-                route("page", path),
-                item.title,
-                image=image_id_cover(item.image_id),
-                role=CatalogRole.INDEX,
-            )
+            # Link imageIds name icons bundled in TIDAL's own apps ("jazz",
+            # "1950s"); TIDAL serves no image for them.
+            return catalog(route("page", path), item.title, role=CatalogRole.INDEX)
         elif isinstance(item, PageItem):
             if item.type.lower() not in {kind.value for kind in KINDS}:
                 return None
@@ -368,7 +370,7 @@ class TidalInputModule(InputModule):
             return catalog(
                 route("promotion", item.type.lower(), str(item.artifact_id)),
                 item.short_header or item.header,
-                image=image_id_cover(item.image_id),
+                image=promotion_cover(item.image_id),
                 can_add=item.type in ("ALBUM", "PLAYLIST", "TRACK"),
             )
         else:
