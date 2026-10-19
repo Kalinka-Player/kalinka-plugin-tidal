@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Show featured promotion banners in the sizes TIDAL serves, instead of
+  square sizes that do not exist. Genre, mood and decade links no longer
+  point at images TIDAL does not serve, so apps show their own artwork.
+
 ## 0.2.2
 
 - Ask TIDAL for an empty page a second time before ending an album or
