@@ -1,7 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
+- Offer TIDAL as a home source. The plugin reports that its browse root leads
+  to catalogs, so the Kalinka app can list TIDAL among the music sources on
+  Home and pin its catalogs. Needs plugin SDK 3.14, which ships with Kalinka
+  Player 5.12.0.
 - Show artist pictures. The plugin asked for a size TIDAL does not offer for
   artists, so every artist was sent without one.
 - Show featured promotion banners in the sizes TIDAL serves, instead of
