@@ -289,6 +289,13 @@ def test_artist_response_includes_flags_required_by_existing_apps(module, artist
     assert payload["can_browse"] is True
 
 
+def test_artist_pictures_use_sizes_tidal_serves(module, artist, track):
+    image = module._item(artist).artist.image
+    assert image.small.endswith("/a/b/c/320x320.jpg")
+    assert image.large.endswith("/a/b/c/750x750.jpg")
+    assert module._item(track).track.performer.image.large.endswith("750x750.jpg")
+
+
 @pytest.mark.parametrize("kind", list(SearchType))
 async def test_search_selects_requested_kind_and_paginates(
     module, session, kind, album, track, artist, playlist

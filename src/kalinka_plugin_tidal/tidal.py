@@ -143,10 +143,12 @@ def catalog(value, title, *, content=None, role=None, image=None, can_add=False)
 def cover(item):
     if item is None:
         return None
+    # 320 works for every type. Artist pictures have no 640 size; the others
+    # (albums, playlists and both mix types) have no 750.
+    large = 750 if isinstance(item, tidalapi.Artist) else 640
     try:
-        # 320 and 640 work for artists, albums, playlists and both mix types.
         return CoverImage(
-            small=item.image(320), thumbnail=item.image(320), large=item.image(640)
+            small=item.image(320), thumbnail=item.image(320), large=item.image(large)
         )
     except (AttributeError, ValueError, TypeError):
         return None
