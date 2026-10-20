@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Show artist pictures. The plugin asked for a size TIDAL does not offer for
+  artists, so every artist was sent without one.
 - Show featured promotion banners in the sizes TIDAL serves, instead of
   square sizes that do not exist. Genre, mood and decade links no longer
   point at images TIDAL does not serve, so apps show their own artwork.
