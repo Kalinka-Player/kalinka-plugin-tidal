@@ -132,10 +132,41 @@ async def test_real_page_parsers_expose_catalogs_and_stable_routes(
     restarted = TidalInputModule(module.client)
     assert (await restarted.browse(shelf.id, limit=1)).items == result.items
     if version == 1:
-        more = (await module.browse(shelf.id, offset=1)).items[0]
-        session.request.request = Mock(return_value=SimpleNamespace(json=lambda: data))
-        assert (await restarted.browse(more.id)).items[0].name == "New Releases"
+        # The preview stays inside the shelf; paging on reads its full list.
+        assert result.total == 2
+        second = {**track_json, "id": 12, "title": "Second"}
+        full = {"title": "All releases", "rows": [{"modules": [{
+            "type": "ALBUM_LIST",
+            "title": "All releases",
+            "pagedList": {"items": [track_json, second]},
+        }]}]}
+        session.request.request = Mock(return_value=SimpleNamespace(json=lambda: full))
+        rest = await restarted.browse(shelf.id, offset=1)
+        assert [item.album.title for item in rest.items] == ["Second"]
+        assert rest.total == 2
         assert session.request.request.call_args.args[:2] == ("GET", "pages/new")
+    else:
+        assert result.total == 1
+
+
+async def test_a_more_page_of_several_shelves_stays_a_link(module, session, album):
+    shelf = SimpleNamespace(
+        title="New Releases",
+        items=[album],
+        _more=SimpleNamespace(api_path="pages/new", title="All releases"),
+    )
+    session.explore = Mock(return_value=SimpleNamespace(categories=[shelf]))
+    more = SimpleNamespace(categories=[
+        SimpleNamespace(title="Albums", items=[album]),
+        SimpleNamespace(title="EPs", items=[album]),
+    ])
+    module._page = Mock(side_effect=lambda value: (
+        more if value != "explore" else session.explore()
+    ))
+    section = (await module.browse(cat("explore"))).items[0]
+    result = await module.browse(section.id)
+    assert [item.name for item in result.items] == ["An Album", "All releases"]
+    assert result.items[1].catalog is not None
 
 
 async def test_duplicate_shelf_titles_have_distinct_ids_and_reordering_is_safe(
@@ -230,6 +261,7 @@ async def test_nested_genre_links_and_promotions_are_lazy(module, session, album
     assert result.items[1].catalog.image.large == (
         "https://resources.tidal.com/images/abc/def/1100x800.jpg"
     )
+    assert result.items[1].catalog.image.aspect_ratio == 1100 / 800
     album.tracks = Mock(return_value=[])
     session.album = Mock(return_value=album)
     await module.browse(result.items[1].id)
@@ -295,7 +327,14 @@ def test_artist_pictures_use_sizes_tidal_serves(module, artist, track):
     image = module._item(artist).artist.image
     assert image.small.endswith("/a/b/c/320x320.jpg")
     assert image.large.endswith("/a/b/c/750x750.jpg")
+    assert image.aspect_ratio == 1.0
     assert module._item(track).track.performer.image.large.endswith("750x750.jpg")
+
+
+def test_a_playlist_without_a_square_picture_reports_its_wide_one(module, playlist):
+    assert module._item(playlist).playlist.image.aspect_ratio == 1.0
+    playlist.square_picture = None
+    assert module._item(playlist).playlist.image.aspect_ratio == 1080 / 720
 
 
 @pytest.mark.parametrize("kind", list(SearchType))

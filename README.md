@@ -2,7 +2,7 @@
 
 Uses the existing [tidalapi](https://github.com/EbbLabs/python-tidal) Python client
 for authentication, catalog metadata, and stream manifests. Requires Python 3.11+
-and Kalinka Player 5.11.0+ (below 6) with Plugin SDK 3.15–3.x. AAC, MP4 and
+and Kalinka Player 5.11.0+ (below 6) with Plugin SDK 3.16–3.x. AAC, MP4 and
 segmented streams play on Kalinka renderer 0.10.0 or newer.
 
 ## Install and sign in
