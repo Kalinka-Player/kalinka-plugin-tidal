@@ -250,6 +250,8 @@ async def test_album_and_playlist_tracks_keep_metadata_and_order(
         assert result.items[0].track.performer.name == "An Artist"
         assert result.items[0].track.album.image.large.endswith("640x640.jpg")
         assert result.items[0].track.replaygain_gain == -5.4
+        payload = result.items[0].track.model_dump(mode="json")
+        assert (payload["track_number"], payload["disc_number"]) == (7, 2)
         assert (
             await module.browse(item.sections[0].id, offset=2, limit=1)
         ).items == result.items
@@ -405,11 +407,19 @@ async def test_track_queueing_is_lazy_and_stream_urls_are_resolved_each_time(
     info = (await module.get_track_info(["11"]))[0]
     track.get_stream.assert_not_called()
     assert info.metadata.title == "A Song (Live)"
+    assert (info.metadata.track_number, info.metadata.disc_number) == (7, 2)
     assert (await info.source_retriever()).format == "flac"
     assert (
         await module.get_track_source("11")
     ).source.url == "https://cdn.example/audio.flac"
     assert track.get_stream.call_count == 2
+
+
+@pytest.mark.parametrize("numbers", [(None, None), (7, None), (None, 2)])
+def test_missing_track_positions_remain_unknown(module, track, numbers):
+    track.track_num, track.volume_num = numbers
+    payload = module._item(track).track.model_dump(mode="json")
+    assert (payload["track_number"], payload["disc_number"]) == numbers
 
 
 def numbered_tracks(track, count):

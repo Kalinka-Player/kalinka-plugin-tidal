@@ -21,7 +21,8 @@ classifiers = [
 ]
 dependencies = [
     # 3.14: ModuleCapability.CATALOGS, which offers TIDAL as a home source.
-    "kalinka-plugin-sdk>=3.14,<4",
+    # 3.15: Track carries track_number and disc_number from TIDAL metadata.
+    "kalinka-plugin-sdk>=3.15,<4",
     "tidalapi>=0.8.11,<0.9",
 ]
 
