@@ -270,6 +270,8 @@ class TidalInputModule(InputModule):
                 id=entity_id(EntityType.TRACK, item.id),
                 title=item.full_name or item.name,
                 duration=max(0, item.duration or 0),
+                track_number=item.track_num,
+                disc_number=item.volume_num,
                 performer=performer,
                 album=album_metadata(item.album, performer),
                 unavailable=not item.available,
