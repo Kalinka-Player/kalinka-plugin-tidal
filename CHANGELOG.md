@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.0
+
+- Keep each shelf to one kind of item. A shelf with more than it shows
+  ended in a catalog card leading to the rest, so an album shelf ended in
+  one card unlike its albums. Opened, the shelf now goes on to the rest of
+  its items in place.
+- Report the shape of covers and promotion banners, so Kalinka app 0.21.0
+  lays out a listing that mixes albums, playlists and promotions before
+  their pictures load.
+- Include track and disc numbers in track details.
+- Needs plugin SDK 3.16, which ships with Kalinka Player 5.13.0.
+
 ## 0.3.0
 
 - Offer TIDAL as a home source. The plugin reports that its browse root leads
