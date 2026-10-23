@@ -15,7 +15,7 @@ from .tidal import TidalInputModule
 
 class KalinkaPluginTidal(InputModulePlugin):
     PLUGIN_ID = "tidal"
-    REQUIRES_SDK = ">=3.15,<4"
+    REQUIRES_SDK = ">=3.16,<4"
     CONFIG_MODEL = TidalConfig
     DYNAMIC_FIELDS: ClassVar[dict[str, DynamicFieldDecl]] = {
         "account_status": DynamicFieldDecl(

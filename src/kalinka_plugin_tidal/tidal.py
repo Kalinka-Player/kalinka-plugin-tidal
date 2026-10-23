@@ -146,9 +146,14 @@ def cover(item):
     # 320 works for every type. Artist pictures have no 640 size; the others
     # (albums, playlists and both mix types) have no 750.
     large = 750 if isinstance(item, tidalapi.Artist) else 640
+    # A playlist without a square picture falls back to its 1080x720 wide one.
+    wide = isinstance(item, tidalapi.Playlist) and not item.square_picture
     try:
         return CoverImage(
-            small=item.image(320), thumbnail=item.image(320), large=item.image(large)
+            small=item.image(320),
+            thumbnail=item.image(320),
+            large=item.image(large),
+            aspect_ratio=1080 / 720 if wide else 1.0,
         )
     except (AttributeError, ValueError, TypeError):
         return None
@@ -167,7 +172,8 @@ def promotion_cover(value):
                 ("thumbnail", "550x400"),
                 ("large", "1100x800"),
             )
-        }
+        },
+        aspect_ratio=1100 / 800,
     )
 
 
@@ -448,6 +454,35 @@ class TidalInputModule(InputModule):
             for key, title, _ in self._categories(value)
         ]
 
+    def _shelf(self, category, offset, limit):
+        """A shelf with a "more" page reads on into that page's list, rather
+        than ending in a catalog row among items of another kind."""
+        items = self._items(category.items)
+        more = getattr(category, "_more", None)
+        more_page = None
+        if more and more.api_path:
+            try:
+                more_page = route("page", page_path(more.api_path))
+            except LookupError:
+                pass
+        if more_page is None:
+            return window(items, offset, limit)
+        if offset + limit <= len(items):
+            # A preview fetches no second page; one more advertised item lets
+            # a client page on.
+            return BrowseItemList(
+                offset=offset,
+                limit=limit,
+                total=len(items) + 1,
+                items=items[offset : offset + limit],
+            )
+        shelves = self._categories(more_page)
+        if len(shelves) != 1:
+            return window(
+                items + [catalog(more_page, more.title or "More")], offset, limit
+            )
+        return window(self._items(shelves[0][2].items), offset, limit)
+
     @staticmethod
     def _root():
         return [
@@ -570,18 +605,8 @@ class TidalInputModule(InputModule):
             return window(self._page_sections(value), offset, limit)
         if parts[0] == "category" and len(parts) == 3:
             for key, _, category in self._categories(parts[1]):
-                if key != parts[2]:
-                    continue
-                items = self._items(category.items)
-                more = getattr(category, "_more", None)
-                if more and more.api_path:
-                    try:
-                        path = page_path(more.api_path)
-                    except LookupError:
-                        pass
-                    else:
-                        items.append(catalog(route("page", path), more.title or "More"))
-                return window(items, offset, limit)
+                if key == parts[2]:
+                    return self._shelf(category, offset, limit)
             raise LookupError(
                 "This TIDAL section has changed. Open its parent catalog again."
             )
