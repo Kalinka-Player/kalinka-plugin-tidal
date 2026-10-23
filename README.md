@@ -129,7 +129,7 @@ cd kalinka-plugin-tidal
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install \
-  "kalinka-plugin-sdk @ git+https://github.com/Kalinka-Player/KalinkaPlayer@main#subdirectory=packages/kalinka-plugin-sdk" \
+  "kalinka-plugin-sdk @ git+https://github.com/Kalinka-Player/KalinkaPlayer@kalinka-v5.13.0#subdirectory=packages/kalinka-plugin-sdk" \
   -e '.[dev]'
 python -m pytest
 ./scripts/build_deb.sh
