@@ -48,6 +48,13 @@ from kalinka_plugin_sdk.inputmodule import (
 )
 
 from .client import CatalogPage
+from .paging import (
+    Listing,
+    item_path,
+    page_total,
+    read_page,
+    reported_count,
+)
 
 PAGES = {
     "home": ("Home", "home"),
@@ -391,13 +398,45 @@ class TidalInputModule(InputModule):
     def _items(self, rows):
         return [mapped for row in rows if (mapped := self._item(row)) is not None]
 
-    def _remote_list(self, rows, offset, limit, total=None):
-        items = self._items(rows)
-        # tidalapi's list methods discard upstream totals. A full page
-        # advertises one more item so clients can request the next page.
-        if total is None:
-            total = offset + len(rows) + int(len(rows) == limit)
-        return BrowseItemList(offset=offset, limit=limit, total=total, items=items)
+    def _parser(self, kind):
+        return {
+            EntityType.TRACK: self.session.parse_track,
+            EntityType.ALBUM: self.session.parse_album,
+            EntityType.ARTIST: self.session.parse_artist,
+            EntityType.PLAYLIST: self.session.parse_playlist,
+        }[kind]
+
+    def _remote_list(self, listing, offset, limit):
+        rows, total = read_page(self.session.request, listing, offset, limit)
+        return BrowseItemList(
+            offset=offset, limit=limit, total=total, items=self._items(rows)
+        )
+
+    def _collection_listing(self, kind):
+        user = item_path("users/%s", self.session.user.id)
+        if kind == "playlist":
+            # Entries wrap each playlist with the date it was added.
+            return Listing(
+                user + "/playlistsAndFavoritePlaylists",
+                lambda entry: self.session.parse_playlist(entry["playlist"]),
+            )
+        if kind not in ("track", "album", "artist"):
+            raise LookupError("Unknown TIDAL collection.")
+        return Listing(f"{user}/favorites/{kind}s", self._parser(EntityType(kind)))
+
+    def _artist_listing(self, artist_id, kind):
+        artist = item_path("artists/%s", artist_id)
+        if kind == "top":
+            return Listing(artist + "/toptracks", self.session.parse_track)
+        if kind == "albums":
+            return Listing(artist + "/albums", self.session.parse_album)
+        if kind == "singles":
+            return Listing(
+                artist + "/albums",
+                self.session.parse_album,
+                {"filter": "EPSANDSINGLES"},
+            )
+        raise LookupError("Unknown TIDAL catalog.")
 
     def _page(self, value):
         def load():
@@ -537,11 +576,6 @@ class TidalInputModule(InputModule):
             while len(tracks) < limit:
                 size = min(MAX_LIMIT, limit - len(tracks))
                 page = self._browse(entity_id, offset, size)
-                if not page.items and offset < page.total:
-                    # Track counts include tracks TIDAL no longer lists, so
-                    # the list can end before the advertised total. Ask
-                    # again so a one-off empty reply does not end it early.
-                    page = self._browse(entity_id, offset, size)
                 if not page.items:
                     break
                 for item in page.items:
@@ -561,24 +595,24 @@ class TidalInputModule(InputModule):
             return tracks
 
         # All pages share one deadline; a request failure aborts the add.
-        # Only a list that is empty twice in a row ends early (see above).
         return await self.client.run(expand)
 
     def _browse(self, eid, offset, limit):
-        if eid.type in (EntityType.ALBUM, EntityType.PLAYLIST):
-            item = self._entity(eid.type, eid.id)
-            total = (
-                item.num_tracks
-                if item.num_tracks is not None and item.num_tracks >= 0
-                else None
+        if eid.type == EntityType.ALBUM:
+            album = self._entity(eid.type, eid.id)
+            listing = Listing(
+                item_path("albums/%s/tracks", album.id),
+                partial(self.session.parse_track, album=album),
             )
-            return self._remote_list(
-                item.tracks(offset=offset, limit=limit), offset, limit, total
+            return self._remote_list(listing, offset, limit)
+        if eid.type == EntityType.PLAYLIST:
+            listing = Listing(
+                item_path("playlists/%s/tracks", eid.id), self.session.parse_track
             )
+            return self._remote_list(listing, offset, limit)
         if eid.type == EntityType.ARTIST:
-            artist = self._entity(eid.type, eid.id)
             return self._remote_list(
-                artist.get_albums(offset=offset, limit=limit), offset, limit
+                self._artist_listing(eid.id, "albums"), offset, limit
             )
         if eid.type == EntityType.TRACK:
             return window([self._item(self._entity(eid.type, eid.id))], offset, limit)
@@ -588,18 +622,8 @@ class TidalInputModule(InputModule):
         if value in PAGES:
             return window(self._page_sections(value), offset, limit)
         if value.startswith("collection-"):
-            kind = value.removeprefix("collection-")
-            if kind == "playlist":
-                rows = self.session.user.playlist_and_favorite_playlists(
-                    offset=offset, limit=limit
-                )
-            elif kind in ("track", "album", "artist"):
-                rows = getattr(self.session.user.favorites, kind + "s")(
-                    offset=offset, limit=limit
-                )
-            else:
-                raise LookupError("Unknown TIDAL collection.")
-            return self._remote_list(rows, offset, limit)
+            listing = self._collection_listing(value.removeprefix("collection-"))
+            return self._remote_list(listing, offset, limit)
         parts = parse_route(value)
         if parts[0] == "page" and len(parts) == 2:
             return window(self._page_sections(value), offset, limit)
@@ -622,19 +646,13 @@ class TidalInputModule(InputModule):
             )
             return window(self._items(rows), offset, limit)
         if parts[0] == "artist" and len(parts) == 3:
-            artist = self._entity(EntityType.ARTIST, parts[1])
             if parts[2] == "similar":
+                artist = self._entity(EntityType.ARTIST, parts[1])
                 rows = self._cached(("similar", parts[1]), artist.get_similar)
                 return window(self._items(rows), offset, limit)
-            method = {
-                "top": "get_top_tracks",
-                "albums": "get_albums",
-                "singles": "get_albums_ep_singles",
-            }.get(parts[2])
-            if method:
-                return self._remote_list(
-                    getattr(artist, method)(offset=offset, limit=limit), offset, limit
-                )
+            return self._remote_list(
+                self._artist_listing(parts[1], parts[2]), offset, limit
+            )
         raise LookupError("Unknown TIDAL catalog.")
 
     async def search(self, type: SearchType, query: str, offset=0, limit=50):
@@ -647,18 +665,30 @@ class TidalInputModule(InputModule):
             # Kalinka asks for all four kinds concurrently on one serialized client.
             results = self._cached(
                 ("search", query, offset, limit),
-                lambda: self.session.search(
-                    query,
-                    models=list(KINDS.values()),
-                    offset=offset,
-                    limit=min(limit, 300 - offset),
-                ),
+                lambda: self.session.request.request(
+                    "GET",
+                    "search",
+                    params={
+                        "query": query,
+                        "types": "tracks,albums,artists,playlists",
+                        "offset": offset,
+                        "limit": min(limit, 300 - offset),
+                    },
+                ).json(),
                 ttl=5,
             )
-            rows = results[kind.value + "s"]
-            result = self._remote_list(rows, offset, limit)
-            result.total = min(result.total, 300)
-            return result
+            found = results.get(kind.value + "s") or {}
+            rows = self.session.request.map_json(
+                {"items": found.get("items") or []}, parse=self._parser(kind)
+            )
+            end = offset + len(rows)
+            total = page_total(end, reported_count(found)) if rows else offset
+            return BrowseItemList(
+                offset=offset,
+                limit=limit,
+                total=min(total, 300),
+                items=self._items(rows),
+            )
 
         return await self.client.run(search)
 
