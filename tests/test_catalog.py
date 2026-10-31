@@ -2,13 +2,11 @@ import asyncio
 import base64
 import json
 import time
-from copy import copy
 from importlib.metadata import entry_points
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
-import tidalapi
 from tidalapi.exceptions import ObjectNotFound
 from tidalapi.media import Stream
 from tidalapi.page import PageItem, PageLink
@@ -22,11 +20,20 @@ from kalinka_plugin_sdk.inputmodule import (
 )
 from kalinka_plugin_tidal.config_model import TidalConfig
 from kalinka_plugin_tidal.client import CatalogPage, TidalClient
+from kalinka_plugin_tidal.paging import MAX_REQUESTS
 from kalinka_plugin_tidal.tidal import TidalInputModule, entity_id, route
 
 
 def cat(value):
     return entity_id(EntityType.CATALOG, value)
+
+
+def numbered(row, count):
+    return [dict(row, id=number) for number in range(count)]
+
+
+def favorite(row):
+    return {"created": "2026-01-01T00:00:00.000+0000", "item": row}
 
 
 def test_plugin_discovery():
@@ -226,7 +233,9 @@ async def test_account_change_invalidates_personalized_pages(module, session, tr
     assert session.home.call_count == 2
 
 
-async def test_nested_genre_links_and_promotions_are_lazy(module, session, album):
+async def test_nested_genre_links_and_promotions_are_lazy(
+    module, session, lists, album
+):
     link = PageLink(
         session,
         {
@@ -262,18 +271,20 @@ async def test_nested_genre_links_and_promotions_are_lazy(module, session, album
         "https://resources.tidal.com/images/abc/def/1100x800.jpg"
     )
     assert result.items[1].catalog.image.aspect_ratio == 1100 / 800
-    album.tracks = Mock(return_value=[])
+    lists.serve("albums/10/tracks", [])
     session.album = Mock(return_value=album)
     await module.browse(result.items[1].id)
     session.album.assert_called_once_with("10")
-    album.tracks.assert_called_once_with(offset=0, limit=50)
+    assert lists.calls == [("albums/10/tracks", {"offset": 0, "limit": 50})]
 
 
 async def test_album_and_playlist_tracks_keep_metadata_and_order(
-    module, album, playlist, track
+    module, lists, album, playlist, track_json
 ):
+    rows = numbered(track_json, 2) + [track_json]
+    lists.serve("albums/10/tracks", rows)
+    lists.serve("playlists/list-1/tracks", rows)
     for parent in (album, playlist):
-        parent.tracks = Mock(return_value=[track])
         item = module._item(parent)
         result = await module.browse(item.id, offset=2, limit=1)
         assert result.total == 3
@@ -287,26 +298,30 @@ async def test_album_and_playlist_tracks_keep_metadata_and_order(
         assert (
             await module.browse(item.sections[0].id, offset=2, limit=1)
         ).items == result.items
-        parent.tracks.assert_called_with(offset=2, limit=1)
+        assert lists.calls[-1][1] == {"offset": 2, "limit": 1}
 
 
-async def test_artist_sections_use_the_corresponding_api(module, artist, album, track):
-    artist.get_albums = Mock(return_value=[album])
-    artist.get_albums_ep_singles = Mock(return_value=[album])
-    artist.get_top_tracks = Mock(return_value=[track])
+async def test_artist_sections_use_the_corresponding_api(
+    module, lists, artist, album_json, track_json
+):
+    lists.serve("artists/7/albums", [album_json] * 5)
+    lists.serve("artists/7/toptracks", [track_json] * 5)
     artist.get_similar = Mock(return_value=[])
     item = module._item(artist)
     for section in item.sections:
         await module.browse(section.id, offset=2, limit=3)
-    artist.get_albums.assert_called_once_with(offset=2, limit=3)
-    artist.get_albums_ep_singles.assert_called_once_with(offset=2, limit=3)
-    artist.get_top_tracks.assert_called_once_with(offset=2, limit=3)
+    assert lists.calls == [
+        ("artists/7/toptracks", {"offset": 2, "limit": 3}),
+        ("artists/7/albums", {"offset": 2, "limit": 3}),
+        ("artists/7/albums", {"filter": "EPSANDSINGLES", "offset": 2, "limit": 3}),
+    ]
     artist.get_similar.assert_called_once_with()
 
 
-async def test_album_response_includes_flags_required_by_existing_apps(module, album, track):
-    album.num_tracks = 1
-    album.tracks = Mock(return_value=[track])
+async def test_album_response_includes_flags_required_by_existing_apps(
+    module, lists, album, track_json
+):
+    lists.serve("albums/10/tracks", [track_json])
     item = module._item(album)
     result = await module.browse(item.id, filter=FilterQuery({}))
     payload = result.model_dump(mode="json", exclude_unset=True)
@@ -337,47 +352,88 @@ def test_a_playlist_without_a_square_picture_reports_its_wide_one(module, playli
     assert module._item(playlist).playlist.image.aspect_ratio == 1080 / 720
 
 
-@pytest.mark.parametrize("kind", list(SearchType))
-async def test_search_selects_requested_kind_and_paginates(
-    module, session, kind, album, track, artist, playlist
-):
-    item = {"album": album, "track": track, "artist": artist, "playlist": playlist}[
-        kind.value
-    ]
-    session.search = Mock(return_value={kind.value + "s": [item]})
-    result = await module.search(kind, "Music", offset=50, limit=1)
-    assert result.total == 52
-    assert result.items[0].id.type.value == kind.value
-    assert session.search.call_args.kwargs == {
-        "models": [tidalapi.Track, tidalapi.Album, tidalapi.Artist, tidalapi.Playlist],
-        "offset": 50,
-        "limit": 1,
+def search_results(rows, count):
+    return {
+        f"{kind}s": {"totalNumberOfItems": count, "items": [row]}
+        for kind, row in rows.items()
     }
+
+
+@pytest.fixture
+def search_rows(track_json, album_json, artist_json, playlist_json):
+    return {
+        "track": track_json,
+        "album": album_json,
+        "artist": artist_json,
+        "playlist": playlist_json,
+    }
+
+
+@pytest.mark.parametrize("kind", list(SearchType))
+async def test_search_selects_requested_kind_and_reports_tidal_totals(
+    module, session, kind, search_rows
+):
+    body = search_results(search_rows, 120)
+    session.request.request = Mock(return_value=SimpleNamespace(json=lambda: body))
+    result = await module.search(kind, "Music", offset=50, limit=1)
+    assert result.total == 120
+    assert result.items[0].id.type.value == kind.value
+    session.request.request.assert_called_once_with(
+        "GET",
+        "search",
+        params={
+            "query": "Music",
+            "types": "tracks,albums,artists,playlists",
+            "offset": 50,
+            "limit": 1,
+        },
+    )
     assert (await module.search(kind, "", offset=0)).total == 0
     assert (await module.search(kind, "Music", offset=300)).total == 0
-    assert session.search.call_count == 1
+    assert session.request.request.call_count == 1
 
 
-async def test_concurrent_search_kinds_share_one_upstream_request(tmp_path, track, album, artist, playlist):
+@pytest.mark.parametrize(
+    "count,items,total",
+    [(5000, 1, 300), (None, 1, 52), (None, 0, 50), (80, 0, 50)],
+)
+async def test_search_total_is_capped_and_ends_where_results_do(
+    module, session, track_json, count, items, total
+):
+    found = {"items": [track_json] * items}
+    if count is not None:
+        found["totalNumberOfItems"] = count
+    session.request.request = Mock(
+        return_value=SimpleNamespace(json=lambda: {"tracks": found})
+    )
+    result = await module.search(SearchType.track, "Music", offset=50, limit=10)
+    assert (result.total, len(result.items)) == (total, items)
+
+
+async def test_concurrent_search_kinds_share_one_upstream_request(tmp_path, search_rows):
     client = TidalClient(tmp_path / "session.json")
     client.ready = True
     module = TidalInputModule(client)
 
     def search(*args, **kwargs):
         time.sleep(0.85)
-        return {"tracks": [track], "albums": [album], "artists": [artist], "playlists": [playlist]}
+        body = search_results(search_rows, 1)
+        return SimpleNamespace(json=lambda: body)
 
-    client.session.search = Mock(side_effect=search)
+    client.session.request.request = Mock(side_effect=search)
     try:
         results = await asyncio.gather(*(module.search(kind, "Music") for kind in SearchType))
         assert [result.items[0].id.type.value for result in results] == [kind.value for kind in SearchType]
-        client.session.search.assert_called_once()
+        client.session.request.request.assert_called_once()
     finally:
         await client.close()
 
 
-async def test_search_cache_expires_and_is_scoped_to_account_and_page(module, session, track):
-    session.search = Mock(return_value={"tracks": [track]})
+async def test_search_cache_expires_and_is_scoped_to_account_and_page(
+    module, session, search_rows
+):
+    body = search_results(search_rows, 1)
+    session.request.request = Mock(return_value=SimpleNamespace(json=lambda: body))
     await module.search(SearchType.track, "Music", limit=1)
     key = ("search", "Music", 0, 1)
     expires, data = module._cache[key]
@@ -387,25 +443,88 @@ async def test_search_cache_expires_and_is_scoped_to_account_and_page(module, se
     await module.search(SearchType.track, "Music", offset=1, limit=1)
     session.user = SimpleNamespace(id=2)
     await module.search(SearchType.track, "Music", limit=1)
-    assert session.search.call_count == 4
+    assert session.request.request.call_count == 4
 
 
-async def test_collection_uses_paged_library_calls(module, session, track, playlist):
-    favorites = SimpleNamespace(
-        tracks=Mock(return_value=[track]),
-        albums=Mock(return_value=[]),
-        artists=Mock(return_value=[]),
-    )
-    session.user = SimpleNamespace(
-        favorites=favorites,
-        playlist_and_favorite_playlists=Mock(return_value=[playlist]),
-    )
-    for shelf in (await module.browse(cat("collection"))).items:
-        await module.browse(shelf.id, offset=50, limit=100)
-    favorites.tracks.assert_called_once_with(offset=50, limit=50)
-    session.user.playlist_and_favorite_playlists.assert_called_once_with(
-        offset=50, limit=50
-    )
+async def test_collection_uses_paged_library_calls(
+    module, session, lists, track_json, album_json, artist_json, playlist_json
+):
+    session.user = SimpleNamespace(id=5)
+    lists.serve("users/5/favorites/tracks", [favorite(track_json)] * 60)
+    lists.serve("users/5/favorites/albums", [favorite(album_json)] * 60)
+    lists.serve("users/5/favorites/artists", [favorite(artist_json)] * 60)
+    entry = {
+        "type": "USER_CREATED",
+        "created": "2026-01-01T00:00:00.000+0000",
+        "playlist": playlist_json,
+    }
+    lists.serve("users/5/playlistsAndFavoritePlaylists", [entry] * 60)
+    shelves = (await module.browse(cat("collection"))).items
+    results = [await module.browse(shelf.id, offset=50, limit=100) for shelf in shelves]
+    assert [call[0].rsplit("/", 1)[-1] for call in lists.calls] == [
+        "tracks", "albums", "artists", "playlistsAndFavoritePlaylists"
+    ]
+    assert all(call[1] == {"offset": 50, "limit": 50} for call in lists.calls)
+    assert [result.total for result in results] == [60] * 4
+    assert [result.items[0].name for result in results] == [
+        "A Song (Live)", "An Album", "An Artist", "A Playlist"
+    ]
+
+
+async def test_favorites_page_on_past_answers_tidal_cuts_short(
+    module, session, lists, track_json
+):
+    session.user = SimpleNamespace(id=5)
+    rows = [favorite(row) for row in numbered(track_json, 120)]
+    # TIDAL answers no further than the next multiple of 50 (issue #10).
+    lists.serve("users/5/favorites/tracks", rows, cap=lambda offset: 50 - offset % 50)
+    seen, totals = [], set()
+    for _ in range(5):
+        page = await module.browse(cat("collection-track"), offset=len(seen), limit=30)
+        seen += [item.id.id for item in page.items]
+        totals.add(page.total)
+        if len(seen) >= page.total:
+            break
+    assert seen == [str(number) for number in range(120)]
+    assert totals == {120}
+
+
+async def test_a_list_tidal_overcounts_ends_with_its_exact_total(
+    module, lists, album, track_json
+):
+    lists.serve("albums/10/tracks", numbered(track_json, 10), count=12)
+    result = await module.browse(module._item(album).id)
+    assert (len(result.items), result.total) == (10, 10)
+    assert [params["offset"] for _, params in lists.calls] == [0, 10, 10]
+
+
+async def test_a_list_without_a_count_advertises_one_more_until_it_ends(
+    module, lists, playlist, track_json
+):
+    lists.serve("playlists/list-1/tracks", numbered(track_json, 60), counted=False)
+    item = module._item(playlist)
+    assert (await module.browse(item.id)).total == 51
+    rest = await module.browse(item.id, offset=50)
+    assert (len(rest.items), rest.total) == (10, 60)
+
+
+async def test_a_page_tidal_keeps_answering_short_is_returned_part_filled(
+    module, lists, playlist, track_json
+):
+    lists.serve("playlists/list-1/tracks", numbered(track_json, 100), cap=lambda offset: 1)
+    item = module._item(playlist)
+    first = await module.browse(item.id)
+    assert (len(first.items), first.total) == (MAX_REQUESTS, 100)
+    second = await module.browse(item.id, offset=MAX_REQUESTS)
+    assert second.items[0].id.id == str(MAX_REQUESTS)
+
+
+async def test_ids_from_clients_stay_one_path_segment(module, lists):
+    lists.serve("playlists/..%2Fsessions/tracks", [])
+    lists.serve("artists/1%2F..%2Fsessions/toptracks", [])
+    await module.browse(entity_id(EntityType.PLAYLIST, "../sessions"))
+    await module.browse(cat(route("artist", "1/../sessions", "top")))
+    assert len(lists.calls) == 2
 
 
 async def test_mix_tracks_are_paginated_without_reloading(module, session, track):
@@ -461,41 +580,33 @@ def test_missing_track_positions_remain_unknown(module, track, numbers):
     assert (payload["track_number"], payload["disc_number"]) == numbers
 
 
-def numbered_tracks(track, count):
-    rows = []
-    for number in range(count):
-        item = copy(track)
-        item.id = number
-        rows.append(item)
-    return rows
+CONTAINER_PATHS = {"album": "albums/10/tracks", "playlist": "playlists/list-1/tracks"}
 
 
 @pytest.mark.parametrize("kind", ["album", "playlist"])
 @pytest.mark.parametrize("limit", [0, 61, 5000])
 async def test_container_add_pages_tracks_and_honors_the_queue_limit(
-    module, session, album, playlist, track, kind, limit
+    module, session, lists, album, playlist, track_json, kind, limit
 ):
     parent = album if kind == "album" else playlist
-    rows = numbered_tracks(track, 80)
+    rows = numbered(track_json, 80)
     rows[-1] = rows[0]  # A repeated playlist track must retain its position.
-    parent.num_tracks = len(rows)
-    parent.tracks = Mock(side_effect=lambda offset, limit: rows[offset:offset + limit])
+    lists.serve(CONTAINER_PATHS[kind], rows)
     item = module._item(parent)
-    session.track = Mock(side_effect=AssertionError("Queue metadata was already fetched"))
     ids = await module.tracks_to_add(item.id, limit)
-    assert [eid.id for eid in ids] == [str(row.id) for row in rows[:limit]]
+    session.track = Mock(side_effect=AssertionError("Queue metadata was already fetched"))
+    assert [eid.id for eid in ids] == [str(row["id"]) for row in rows[:limit]]
     assert [item.id for item in await module.get_all(ids)] == ids
-    assert all(call.kwargs["limit"] <= 50 for call in parent.tracks.call_args_list)
+    assert all(params["limit"] <= 50 for _, params in lists.calls)
     if limit > 50:
-        assert parent.tracks.call_args_list[1].kwargs["offset"] == 50
+        assert lists.calls[1][1]["offset"] == 50
 
 
 async def test_large_container_keeps_metadata_until_the_queue_resolves_it(
-    module, session, playlist, track
+    module, session, lists, playlist, track_json
 ):
-    rows = numbered_tracks(track, 600)
-    playlist.num_tracks = len(rows)
-    playlist.tracks = Mock(side_effect=lambda offset, limit: rows[offset:offset + limit])
+    rows = numbered(track_json, 600)
+    lists.serve(CONTAINER_PATHS["playlist"], rows)
     item = module._item(playlist)
     ids = await module.tracks_to_add(item.id, 5000)
     session.track = Mock(side_effect=AssertionError("Do not refetch expanded tracks"))
@@ -506,63 +617,61 @@ async def test_large_container_keeps_metadata_until_the_queue_resolves_it(
 @pytest.mark.parametrize("kind", ["album", "playlist"])
 @pytest.mark.parametrize("listed", [0, 10, 50])
 async def test_tracks_tidal_no_longer_lists_do_not_fail_the_add(
-    module, album, playlist, track, kind, listed
+    module, lists, album, playlist, track_json, kind, listed
 ):
     # TIDAL counts tracks that its track listing omits.
     parent = album if kind == "album" else playlist
-    rows = numbered_tracks(track, listed)
-    parent.num_tracks = listed + 2
-    parent.tracks = Mock(side_effect=lambda offset, limit: rows[offset:offset + limit])
+    rows = numbered(track_json, listed)
+    lists.serve(CONTAINER_PATHS[kind], rows, count=listed + 2)
     item = module._item(parent)
     ids = await module.tracks_to_add(item.id, 5000)
-    assert [eid.id for eid in ids] == [str(row.id) for row in rows]
+    assert [eid.id for eid in ids] == [str(row["id"]) for row in rows]
 
 
-async def test_one_off_empty_page_does_not_cut_the_add_short(module, playlist, track):
-    rows = numbered_tracks(track, 80)
-    playlist.num_tracks = len(rows)
-    playlist.tracks = Mock(side_effect=[rows[:50], [], rows[50:]])
+async def test_one_off_empty_page_does_not_cut_the_add_short(
+    module, lists, playlist, track_json
+):
+    rows = numbered(track_json, 80)
+    lists.serve(CONTAINER_PATHS["playlist"], rows, empty_at={50})
     item = module._item(playlist)
     ids = await module.tracks_to_add(item.id, 5000)
-    assert [eid.id for eid in ids] == [str(row.id) for row in rows]
+    assert [eid.id for eid in ids] == [str(row["id"]) for row in rows]
 
 
-async def test_unplayable_listed_tracks_are_still_added(module, album, track):
-    track.available = False
-    album.num_tracks = 1
-    album.tracks = Mock(return_value=[track])
+async def test_unplayable_listed_tracks_are_still_added(
+    module, lists, album, track_json
+):
+    lists.serve(CONTAINER_PATHS["album"], [dict(track_json, allowStreaming=False)])
     ids = await module.tracks_to_add(module._item(album).id, 5000)
     [added] = await module.get_all(ids)
     assert added.id == ids[0]
     assert added.track.unavailable
 
 
-async def test_short_upstream_pages_do_not_skip_tracks(module, playlist, track):
-    rows = numbered_tracks(track, 80)
-    playlist.num_tracks = len(rows)
-    playlist.tracks = Mock(
-        side_effect=lambda offset, limit: rows[offset:offset + min(limit, 17)]
-    )
+async def test_short_upstream_pages_do_not_skip_tracks(
+    module, lists, playlist, track_json
+):
+    rows = numbered(track_json, 80)
+    lists.serve(CONTAINER_PATHS["playlist"], rows, cap=lambda offset: 17)
     item = module._item(playlist)
     ids = await module.tracks_to_add(item.id, 5000)
-    assert [eid.id for eid in ids] == [str(row.id) for row in rows]
-    assert [call.kwargs["offset"] for call in playlist.tracks.call_args_list] == [
-        0, 17, 34, 51, 68
-    ]
+    assert [eid.id for eid in ids] == [str(row["id"]) for row in rows]
+    assert [params["offset"] for _, params in lists.calls] == [0, 17, 34, 50, 67]
 
 
-async def test_mix_add_includes_tracks_beyond_the_first_page(module, session, track):
-    rows = numbered_tracks(track, 80)
+async def test_mix_add_includes_tracks_beyond_the_first_page(module, session, track_json):
+    rows = [session.parse_track(row) for row in numbered(track_json, 80)]
     session.mix = Mock(return_value=SimpleNamespace(items=Mock(return_value=rows)))
     ids = await module.tracks_to_add(cat(route("mix", "daily")), 5000)
     assert [eid.id for eid in ids] == [str(row.id) for row in rows]
     session.mix.assert_called_once_with("daily")
 
 
-async def test_account_change_discards_queue_metadata(module, session, playlist, track):
+async def test_account_change_discards_queue_metadata(
+    module, session, lists, playlist, track_json
+):
     session.user = SimpleNamespace(id=1)
-    playlist.num_tracks = 1
-    playlist.tracks = Mock(return_value=[track])
+    lists.serve(CONTAINER_PATHS["playlist"], [track_json])
     item = module._item(playlist)
     ids = await module.tracks_to_add(item.id, 5000)
     session.user = SimpleNamespace(id=2)

@@ -485,11 +485,15 @@ async def test_bulk_missing_ids_are_omitted_but_transient_failures_abort(client,
         await module.get_all([cached.id, missing])
 
 
-async def test_later_container_page_error_aborts_the_whole_add(client, playlist, track):
+async def test_later_container_page_error_aborts_the_whole_add(
+    client, playlist, track_json
+):
     client.ready = True
     module = TidalInputModule(client)
-    playlist.num_tracks = 80
-    playlist.tracks = Mock(side_effect=[[track] * 50, requests.Timeout()])
+    page = {"totalNumberOfItems": 80, "items": [track_json] * 50}
+    client.session.request.request = Mock(
+        side_effect=[SimpleNamespace(json=lambda: page), requests.Timeout()]
+    )
     item = module._item(playlist)
     with pytest.raises(SourceUnavailableError):
         await module.tracks_to_add(item.id, 5000)

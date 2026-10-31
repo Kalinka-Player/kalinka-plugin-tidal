@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Page favorites, My Playlists, album and playlist tracks, artist lists and search through to their end (issue #10). TIDAL can answer a page short while the list goes on, and the plugin took the short page for the end, so a favorites list stopped at 50. Pages short of the end are now filled, lists report TIDAL's own totals, and a list ends with its exact count so apps stop asking for more.
+
 ## 0.4.0
 
 - Keep each shelf to one kind of item. A shelf with more than it shows
