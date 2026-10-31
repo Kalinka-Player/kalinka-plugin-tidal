@@ -1,0 +1,14 @@
+TIDAL artwork
+-------------
+src/kalinka_plugin_tidal/icons/tidal.svg is a vector conversion of
+Logo/TIDAL Icon/RGB/EPS/icon-black-rgb.eps from TIDAL's official press kit:
+https://assets.tidal.com/press/TIDAL-Logo%26Fonts-2021Q4.zip
+https://tidal.com/press
+(retrieved 2026-10-30, converted 2026-10-31).
+
+The diamond paths and proportions are preserved. The icon is rendered in
+black or white for compact app attribution, as described at
+https://developer.tidal.com/documentation/guidelines/guidelines-design-guidelines
+
+TIDAL artwork and trademarks belong to their respective owners and are not
+covered by this plugin's GPL license. This is an independent integration.

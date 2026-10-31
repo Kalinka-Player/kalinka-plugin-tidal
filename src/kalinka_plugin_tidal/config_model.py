@@ -1,8 +1,10 @@
 from enum import Enum
+from pathlib import Path
 from typing import ClassVar
 
 from pydantic import Field
 
+from kalinka_plugin_sdk import ModuleIconFiles
 from kalinka_plugin_sdk.module_config import ModuleConfig
 
 
@@ -14,6 +16,11 @@ class TidalAudioQuality(str, Enum):
 class TidalConfig(ModuleConfig):
     __module_icon__: ClassVar[str] = "music_note_outlined"
     __module_icon_color__: ClassVar[str] = "#007E8A"
+    __module_icon_files__: ClassVar[ModuleIconFiles] = ModuleIconFiles(
+        small=Path(__file__).with_name("icons") / "tidal.svg",
+        standard=Path(__file__).with_name("icons") / "tidal.svg",
+        monochrome=True,
+    )
 
     name: str = Field(
         default="tidal",
