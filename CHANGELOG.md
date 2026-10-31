@@ -1,8 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
 
+- Supply monochrome TIDAL artwork, which Kalinka app 0.24.0 draws wherever it names the source, such as the attribution mark beside a track.
 - Page favorites, My Playlists, album and playlist tracks, artist lists and search through to their end (issue #10). TIDAL can answer a page short while the list goes on, and the plugin took the short page for the end, so a favorites list stopped at 50. Pages short of the end are now filled, lists report TIDAL's own totals, and a list ends with its exact count so apps stop asking for more.
+- Needs plugin SDK 3.18, which ships with Kalinka Player 5.16.0.
 
 ## 0.4.0
 
