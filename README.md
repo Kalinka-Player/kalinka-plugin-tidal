@@ -2,8 +2,12 @@
 
 Uses the existing [tidalapi](https://github.com/EbbLabs/python-tidal) Python client
 for authentication, catalog metadata, and stream manifests. Requires Python 3.11+
-and Kalinka Player 5.11.0+ (below 6) with Plugin SDK 3.16–3.x. AAC, MP4 and
+and Kalinka Player 5.11.0+ (below 6) with Plugin SDK 3.18–3.x. AAC, MP4 and
 segmented streams play on Kalinka renderer 0.10.0 or newer.
+
+The plugin packages TIDAL's monochrome diamond icon for source attribution
+and listings on servers with plugin artwork support. See [NOTICE](NOTICE)
+for its source.
 
 ## Install and sign in
 
@@ -129,7 +133,7 @@ cd kalinka-plugin-tidal
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install \
-  "kalinka-plugin-sdk @ git+https://github.com/Kalinka-Player/KalinkaPlayer@kalinka-v5.13.0#subdirectory=packages/kalinka-plugin-sdk" \
+  "kalinka-plugin-sdk @ git+https://github.com/Kalinka-Player/KalinkaPlayer@f3f2e028f84c876b51df469a4499ddd4a91492fb#subdirectory=packages/kalinka-plugin-sdk" \
   -e '.[dev]'
 python -m pytest
 ./scripts/build_deb.sh

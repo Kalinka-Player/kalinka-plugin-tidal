@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 141.73 94.49">
+  <title>TIDAL</title>
+  <defs>
+    <clipPath id="clip-0">
+      <path clip-rule="nonzero" d="M 47 46 L 95 46 L 95 93.984375 L 47 93.984375 Z M 47 46 " />
+    </clipPath>
+    <clipPath id="clip-1">
+      <path clip-rule="nonzero" d="M 0.246094 0 L 48 0 L 48 47 L 0.246094 47 Z M 0.246094 0 " />
+    </clipPath>
+    <clipPath id="clip-2">
+      <path clip-rule="nonzero" d="M 94 0 L 141.214844 0 L 141.214844 47 L 94 47 Z M 94 0 " />
+    </clipPath>
+  </defs>
+  <path fill-rule="nonzero" fill="black" fill-opacity="1" d="M 94.226562 23.492188 L 70.734375 46.988281 L 47.238281 23.492188 L 70.734375 -0.00390625 L 94.226562 23.492188 " />
+  <g clip-path="url(#clip-0)">
+    <path fill-rule="nonzero" fill="black" fill-opacity="1" d="M 94.226562 70.488281 L 70.734375 93.980469 L 47.238281 70.488281 L 70.734375 46.988281 L 94.226562 70.488281 " />
+  </g>
+  <g clip-path="url(#clip-1)">
+    <path fill-rule="nonzero" fill="black" fill-opacity="1" d="M 47.238281 23.492188 L 23.742188 46.992188 L 0.246094 23.492188 L 23.742188 0 L 47.238281 23.492188 " />
+  </g>
+  <g clip-path="url(#clip-2)">
+    <path fill-rule="nonzero" fill="black" fill-opacity="1" d="M 141.21875 23.492188 L 117.722656 46.992188 L 94.226562 23.492188 L 117.722656 0 L 141.21875 23.492188 " />
+  </g>
+</svg>

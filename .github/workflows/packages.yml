@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 env:
-  KALINKA_SDK_REF: ${{ vars.KALINKA_SDK_REF || 'kalinka-v5.13.0' }}
+  KALINKA_SDK_REF: ${{ vars.KALINKA_SDK_REF || 'f3f2e028f84c876b51df469a4499ddd4a91492fb' }}
 
 jobs:
   deb:
