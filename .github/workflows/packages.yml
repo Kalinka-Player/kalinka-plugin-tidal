@@ -14,7 +14,8 @@ permissions:
   contents: read
 
 env:
-  KALINKA_SDK_REF: ${{ vars.KALINKA_SDK_REF || 'f3f2e028f84c876b51df469a4499ddd4a91492fb' }}
+  # SDK 3.19.0, including the audio codec API; keep overrides at 3.19 or newer.
+  KALINKA_SDK_REF: ${{ vars.KALINKA_SDK_REF || 'e1e9d03db6f6b9fdd7e82411ad1c27cd709e5693' }}
 
 jobs:
   deb:

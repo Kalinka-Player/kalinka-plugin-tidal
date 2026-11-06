@@ -23,7 +23,8 @@ dependencies = [
     # 3.14: ModuleCapability.CATALOGS, which offers TIDAL as a home source.
     # 3.15: Track carries track_number and disc_number from TIDAL metadata.
     # 3.16: CoverImage carries aspect_ratio.
-    "kalinka-plugin-sdk>=3.18,<4",
+    # 3.19: TrackSource carries the audio codec separately from its container.
+    "kalinka-plugin-sdk>=3.19,<4",
     "tidalapi>=0.8.11,<0.9",
 ]
 

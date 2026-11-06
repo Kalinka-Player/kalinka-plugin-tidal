@@ -797,10 +797,11 @@ class TidalInputModule(InputModule):
             # Never cache signed stream URLs: resolve at the moment of play.
             stream = self._entity(EntityType.TRACK, track_id).get_stream()
             if stream.is_mpd:
-                self._dash_manifest(stream)
+                _, audio_codec = self._dash_manifest(stream)
                 return TrackSource(
                     source=ModuleAsset(module="tidal", asset_id=f"dash-{track_id}"),
                     format="application/dash+xml",
+                    audio_codec=audio_codec,
                 )
             if not stream.is_bts:
                 raise SourceUnavailableError(
@@ -808,6 +809,10 @@ class TidalInputModule(InputModule):
                 )
             try:
                 manifest = stream.get_stream_manifest()
+                # tidalapi's manifest.codecs drops everything after the first
+                # dot. Keep the object type so an unknown mp4a codec is not
+                # displayed as AAC merely because it shares the prefix.
+                codec = json.loads(stream.get_manifest_data())["codecs"]
             except (KeyError, ValueError):
                 raise SourceUnavailableError(
                     "TIDAL returned an invalid stream manifest."
@@ -820,7 +825,8 @@ class TidalInputModule(InputModule):
             if not urls or urlsplit(urls[0]).scheme not in ("https", "http"):
                 raise SourceUnavailableError("TIDAL did not provide a playable stream.")
             return TrackSource(
-                source=DirectUrl(url=urls[0]), format=self._direct_format(manifest)
+                source=DirectUrl(url=urls[0]), format=self._direct_format(manifest),
+                audio_codec=self._audio_codec(codec),
             )
 
         return await self.client.run(resolve, timeout=7.5)
@@ -840,6 +846,43 @@ class TidalInputModule(InputModule):
         )
 
     @staticmethod
+    def _audio_codec(codec):
+        return {
+            "FLAC": "flac", "AAC": "aac", "MP3": "mp3", "MP4A": "aac",
+            "MP4A.40.2": "aac", "MP4A.40.5": "aac", "MP4A.40.29": "aac",
+        }.get(str(codec).upper())
+
+    @staticmethod
+    def _dash_audio_codec(root):
+        # Match DashManifest::parse: the highest-bandwidth supported
+        # representation in its single Period, first in document order on ties.
+        ns = {"mpd": "urn:mpeg:dash:schema:mpd:2011"}
+        periods = root.findall("mpd:Period", ns)
+        if len(periods) != 1:
+            return None
+        selected, best = None, -1
+        for adaptation in periods[0].findall("mpd:AdaptationSet", ns):
+            for representation in adaptation.findall("mpd:Representation", ns):
+                codec = representation.get("codecs") or adaptation.get("codecs", "")
+                if codec not in ("flac", "fLaC", "mp4a.40.2", "mp4a.40.5", "mp4a.40.29"):
+                    continue
+                bandwidth = representation.get("bandwidth") or "0"
+                if not bandwidth.isascii() or not bandwidth.isdigit():
+                    return None
+                # The renderer's number() caps manifest integers at 10**12.
+                # Drop leading zeroes before the length check so a long value
+                # cannot reach Python's integer conversion limit.
+                digits = bandwidth.lstrip("0") or "0"
+                if len(digits) > 13:
+                    return None
+                bitrate = int(digits)
+                if bitrate > 10**12:
+                    return None
+                if bitrate > best:
+                    selected, best = TidalInputModule._audio_codec(codec), bitrate
+        return selected
+
+    @staticmethod
     def _dash_manifest(stream):
         try:
             data = stream.get_manifest_data().encode("utf-8")
@@ -853,7 +896,7 @@ class TidalInputModule(InputModule):
             raise SourceUnavailableError("TIDAL returned an invalid DASH manifest.") from None
         if any(e.tag.rsplit("}", 1)[-1] == "ContentProtection" for e in root.iter()):
             raise SourceUnavailableError("Encrypted TIDAL streams are not supported.")
-        return data
+        return data, TidalInputModule._dash_audio_codec(root)
 
     async def get_content_info(self, asset_id):
         if (not asset_id.startswith("dash-")
@@ -866,7 +909,7 @@ class TidalInputModule(InputModule):
                 raise SourceUnavailableError(
                     "TIDAL changed the stream format. Play the track again."
                 )
-            data = self._dash_manifest(stream)
+            data, _ = self._dash_manifest(stream)
             return ContentInfo(
                 mime_type="application/dash+xml",
                 reader=lambda: io.BytesIO(data), size=len(data), cacheable=False,
