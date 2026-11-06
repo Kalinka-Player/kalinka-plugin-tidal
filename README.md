@@ -2,7 +2,7 @@
 
 Uses the existing [tidalapi](https://github.com/EbbLabs/python-tidal) Python client
 for authentication, catalog metadata, and stream manifests. Requires Python 3.11+
-and Kalinka Player 5.11.0+ (below 6) with Plugin SDK 3.18–3.x. AAC, MP4 and
+and Kalinka Player 5.11.0+ (below 6) with Plugin SDK 3.19–3.x. AAC, MP4 and
 segmented streams play on Kalinka renderer 0.10.0 or newer.
 
 The plugin packages TIDAL's monochrome diamond icon for source attribution
@@ -119,6 +119,11 @@ segments carry FLAC or AAC. Segmented, AAC and MP4 streams need Kalinka renderer
 streams and other codecs such as Dolby Atmos are rejected with a readable error.
 There is no transcoding or downloading of whole tracks.
 
+The plugin reports the encoded audio codec separately from the container or
+manifest type. Kalinka Player 5.17.0+ forwards it to compatible apps, so Now
+Playing can show FLAC or AAC instead of MP4 or DASH. Unknown codecs are left
+unset, allowing the app to fall back to the source format.
+
 tidalapi is an unofficial client. Availability depends on the account, region,
 subscription, and TIDAL's API. Tests use the installed library with fake API
 responses; live account sign-in and playback need verification with an account.
@@ -133,7 +138,7 @@ cd kalinka-plugin-tidal
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install \
-  "kalinka-plugin-sdk @ git+https://github.com/Kalinka-Player/KalinkaPlayer@f3f2e028f84c876b51df469a4499ddd4a91492fb#subdirectory=packages/kalinka-plugin-sdk" \
+  "kalinka-plugin-sdk @ git+https://github.com/Kalinka-Player/KalinkaPlayer@e1e9d03db6f6b9fdd7e82411ad1c27cd709e5693#subdirectory=packages/kalinka-plugin-sdk" \
   -e '.[dev]'
 python -m pytest
 ./scripts/build_deb.sh

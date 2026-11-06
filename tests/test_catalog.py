@@ -551,6 +551,7 @@ async def test_track_queueing_is_lazy_and_stream_urls_are_resolved_each_time(
     stream = SimpleNamespace(
         is_bts=True,
         is_mpd=False,
+        get_manifest_data=lambda: json.dumps({"codecs": "FLAC"}),
         get_stream_manifest=Mock(
             return_value=SimpleNamespace(
                 encryption_type="NONE",
@@ -696,6 +697,7 @@ async def test_unsupported_streams_fail_clearly(
         return_value=SimpleNamespace(
             is_bts=bts,
             is_mpd=False,
+            get_manifest_data=lambda: json.dumps({"codecs": codec}),
             get_stream_manifest=lambda: SimpleNamespace(
                 encryption_type=encryption,
                 codecs=codec,
@@ -745,25 +747,28 @@ def bts_stream(**manifest):
 
 
 @pytest.mark.parametrize(
-    "codec,mime_type,format",
+    "codec,mime_type,format,audio_codec",
     [
-        ("AAC", "audio/mp4", "audio/mp4"),
-        ("mp4a.40.2", "audio/mp4", "audio/mp4"),
-        ("mp4a.40.5", "audio/m4a", "audio/mp4"),
-        ("FLAC", "audio/mp4", "audio/mp4"),
-        ("flac", "audio/flac", "flac"),
-        ("FLAC", "audio/x-flac", "flac"),
-        ("FLAC", None, "flac"),
-        ("MP3", "audio/mpeg", "mp3"),
+        ("AAC", "audio/mp4", "audio/mp4", "aac"),
+        ("mp4a.40.2", "audio/mp4", "audio/mp4", "aac"),
+        ("mp4a.40.5", "audio/m4a", "audio/mp4", "aac"),
+        ("mp4a.40.29", "audio/mp4", "audio/mp4", "aac"),
+        ("mp4a.40.999", "audio/mp4", "audio/mp4", None),
+        ("FLAC", "audio/mp4", "audio/mp4", "flac"),
+        ("flac", "audio/flac", "flac", "flac"),
+        ("FLAC", "audio/x-flac", "flac", "flac"),
+        ("FLAC", None, "flac", "flac"),
+        ("MP3", "audio/mpeg", "mp3", "mp3"),
     ],
 )
 async def test_bts_stream_format_follows_codec_and_container(
-    module, track, codec, mime_type, format
+    module, track, codec, mime_type, format, audio_codec
 ):
     track.get_stream = Mock(return_value=bts_stream(codecs=codec, mimeType=mime_type))
     module._item(track)
     source = await module.get_track_source("11")
     assert source.format == format
+    assert source.audio_codec == audio_codec
     assert source.source.url == "https://cdn.example/audio?token=private"
 
 

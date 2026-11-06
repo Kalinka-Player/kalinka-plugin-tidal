@@ -182,7 +182,7 @@ async def test_quality_setting_reaches_tidal_stream_request(
             "trackId": 11, "audioQuality": requested,
             "manifestMimeType": "application/dash+xml", "manifest": "",
         }))
-        plugin.interface._dash_manifest = Mock(return_value=b"manifest")
+        plugin.interface._dash_manifest = Mock(return_value=(b"manifest", None))
         await plugin.interface.get_track_source("11")
         await plugin.interface.get_content_info("dash-11")
         assert session.request.request.call_count == 2

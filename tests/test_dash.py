@@ -33,13 +33,14 @@ def stream(xml=MANIFEST):
     })
 
 
-@pytest.mark.parametrize("xml", [MANIFEST, AAC_MANIFEST])
-async def test_dash_is_served_as_a_manifest_for_the_renderer(module, session, track, xml):
+@pytest.mark.parametrize("xml,codec", [(MANIFEST, "flac"), (AAC_MANIFEST, "aac")])
+async def test_dash_is_served_as_a_manifest_for_the_renderer(module, session, track, xml, codec):
     track.get_stream = Mock(return_value=stream(xml))
     session.track = Mock(return_value=track)
     source = await module.get_track_source("11")
     assert source.source == ModuleAsset(module="tidal", asset_id="dash-11")
     assert source.format == "application/dash+xml"
+    assert source.audio_codec == codec
     assert not source.sequential
     assert "private" not in source.model_dump_json()
     info = await module.get_content_info(source.source.asset_id)
@@ -51,6 +52,80 @@ async def test_dash_is_served_as_a_manifest_for_the_renderer(module, session, tr
         assert reader.read() == xml.encode()[10:]
     with info.reader() as reader:
         assert reader.read() == xml.encode()
+
+
+@pytest.mark.parametrize("codec,expected", [
+    ("flac", "flac"), ("fLaC", "flac"),
+    ("mp4a.40.2", "aac"), ("mp4a.40.5", "aac"), ("mp4a.40.29", "aac"),
+    ("ec-3", None), ("", None),
+])
+async def test_codec_is_inherited_from_adaptation_set(module, session, track, codec, expected):
+    xml = MANIFEST.replace(' codecs="flac"', '').replace(
+        'contentType="audio"', f'contentType="audio" codecs="{codec}"'
+    )
+    track.get_stream = Mock(return_value=stream(xml))
+    session.track = Mock(return_value=track)
+    source = await module.get_track_source("11")
+    assert source.audio_codec == expected
+    assert source.format == "application/dash+xml"
+
+
+@pytest.mark.parametrize("representations,expected", [
+    ('<Representation codecs="mp4a.40.2" bandwidth="320000"/>'
+     '<Representation codecs="flac" bandwidth="900000"/>', "flac"),
+    ('<Representation codecs="mp4a.40.2" bandwidth="900000"/>'
+     '<Representation codecs="flac" bandwidth="320000"/>', "aac"),
+    ('<Representation codecs="mp4a.40.2"/><Representation codecs="flac"/>', "aac"),
+    ('<Representation codecs="mp4a.40.2" bandwidth="320000"/>'
+     '</AdaptationSet><AdaptationSet><Representation codecs="flac" bandwidth="320000"/>', "aac"),
+    ('<Representation codecs="ec-3" bandwidth="999999"/>'
+     '<Representation codecs="mp4a.40.2" bandwidth="320000"/>', "aac"),
+    ('<Representation codecs="mp4a.40.5"/>', "aac"),  # overrides inherited FLAC
+    ('<Representation codecs="ec-3"/>', None),
+    ('<Representation codecs="flac" bandwidth="invalid"/>', None),
+    ('<Representation codecs="flac" bandwidth="320000"/>'
+     '<Representation codecs="mp4a.40.2" bandwidth="1000000000001"/>', None),
+])
+async def test_display_codec_follows_renderer_selection(
+    module, session, track, representations, expected
+):
+    xml = (
+        '<MPD xmlns="urn:mpeg:dash:schema:mpd:2011"><Period>'
+        f'<AdaptationSet codecs="flac">{representations}</AdaptationSet>'
+        '</Period></MPD>'
+    )
+    track.get_stream = Mock(return_value=stream(xml))
+    session.track = Mock(return_value=track)
+    assert (await module.get_track_source("11")).audio_codec == expected
+
+
+@pytest.mark.parametrize("bandwidth,expected", [
+    ("", "flac"), ("0", "flac"), ("1000000000000", "flac"),
+    ("0" * 5000 + "320000", "flac"),
+    ("1000000000001", None), ("18446744073709551615", None),
+    ("9" * 5000, None), ("-1", None), ("+1", None),
+    ("1.5", None), (" 320000", None), ("３２００００", None),
+])
+async def test_display_codec_respects_renderer_bandwidth_limits(
+    module, session, track, bandwidth, expected
+):
+    xml = MANIFEST.replace('<Representation ', f'<Representation bandwidth="{bandwidth}" ')
+    track.get_stream = Mock(return_value=stream(xml))
+    session.track = Mock(return_value=track)
+    source = await module.get_track_source("11")
+    assert source.audio_codec == expected
+    assert source.format == "application/dash+xml"
+
+
+@pytest.mark.parametrize("multiple", [False, True], ids=["no-period", "multiple-periods"])
+async def test_no_codec_is_guessed_without_a_single_period(module, session, track, multiple):
+    xml = (
+        MANIFEST.replace('</MPD>', '<Period/></MPD>')
+        if multiple else MANIFEST.replace('Period>', 'Ignored>')
+    )
+    track.get_stream = Mock(return_value=stream(xml))
+    session.track = Mock(return_value=track)
+    assert (await module.get_track_source("11")).audio_codec is None
 
 
 async def test_manifest_urls_are_refreshed_when_requested(module, session, track):
