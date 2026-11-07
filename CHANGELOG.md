@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.0
+
+- Report the encoded audio codec separately from the container or manifest
+  type, so Now Playing can show FLAC or AAC instead of MP4 or DASH, with
+  Kalinka Player 5.17.0+ and Kalinka app 0.26.0. Unknown codecs are left
+  unset, falling back to the source format as before.
+- Needs plugin SDK 3.19, which ships with Kalinka Player 5.17.0.
+
 ## 0.5.0
 
 - Supply monochrome TIDAL artwork, which Kalinka app 0.24.0 draws wherever it names the source, such as the attribution mark beside a track.
