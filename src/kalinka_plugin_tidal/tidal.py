@@ -70,6 +70,8 @@ KINDS = {
     EntityType.PLAYLIST: tidalapi.Playlist,
 }
 MAX_LIMIT = 50
+# SDK 3.22: the server keeps TIDAL's search order. Older servers rank by name.
+RANKED_SEARCH = getattr(ModuleCapability, "RANKED_SEARCH", None)
 MP4_MIME_TYPES = frozenset({"audio/mp4", "audio/m4a"})
 
 
@@ -247,7 +249,11 @@ class TidalInputModule(InputModule):
         return "TIDAL"
 
     def capabilities(self) -> frozenset[ModuleCapability]:
-        return frozenset({ModuleCapability.CATALOGS})
+        return frozenset(
+            capability
+            for capability in (ModuleCapability.CATALOGS, RANKED_SEARCH)
+            if capability is not None
+        )
 
     def _remember(self, key, value, *, ttl=300):
         self._check_account()
