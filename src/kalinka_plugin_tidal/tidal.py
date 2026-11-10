@@ -207,6 +207,20 @@ def album_metadata(item, performer=None):
     )
 
 
+def is_empty_profile(artist_json):
+    """An artist search hit with nothing released under it.
+
+    TIDAL's search lists profiles that hold no albums, singles or tracks.
+    Artists with releases carry a picture, an album cover to fall back on or
+    an artist mix; these profiles carry none.
+    """
+    return not (
+        artist_json.get("picture")
+        or artist_json.get("selectedAlbumCoverFallback")
+        or artist_json.get("mixes")
+    )
+
+
 def window(items, offset, limit):
     return BrowseItemList(
         offset=offset,
@@ -678,11 +692,18 @@ class TidalInputModule(InputModule):
                 ttl=5,
             )
             found = results.get(kind.value + "s") or {}
+            listed = found.get("items") or []
+            kept = [
+                row
+                for row in listed
+                if kind != EntityType.ARTIST or not is_empty_profile(row)
+            ]
             rows = self.session.request.map_json(
-                {"items": found.get("items") or []}, parse=self._parser(kind)
+                {"items": kept}, parse=self._parser(kind)
             )
-            end = offset + len(rows)
-            total = page_total(end, reported_count(found)) if rows else offset
+            # Paging stays in TIDAL's offsets, so a filtered page may run short.
+            end = offset + len(listed)
+            total = page_total(end, reported_count(found)) if listed else offset
             return BrowseItemList(
                 offset=offset,
                 limit=limit,

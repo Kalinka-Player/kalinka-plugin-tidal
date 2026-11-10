@@ -410,6 +410,39 @@ async def test_search_total_is_capped_and_ends_where_results_do(
     assert (result.total, len(result.items)) == (total, items)
 
 
+async def test_search_drops_artist_profiles_with_nothing_released(
+    module, session, artist_json, album_json
+):
+    empty = {"id": 8, "name": "An Artist", "picture": None, "mixes": {}}
+    with_mix = {**empty, "id": 9, "mixes": {"ARTIST_MIX": "abc"}}
+    with_cover = {**empty, "id": 10, "selectedAlbumCoverFallback": "d-e-f"}
+    body = {
+        "artists": {
+            "totalNumberOfItems": 80,
+            "items": [artist_json, empty, with_mix, with_cover],
+        },
+        "albums": {"totalNumberOfItems": 1, "items": [album_json]},
+    }
+    session.request.request = Mock(return_value=SimpleNamespace(json=lambda: body))
+
+    artists = await module.search(SearchType.artist, "An Artist", limit=4)
+    assert [item.id.id for item in artists.items] == ["7", "9", "10"]
+    assert artists.total == 80
+
+    albums = await module.search(SearchType.album, "An Artist", limit=4)
+    assert [item.id.id for item in albums.items] == ["10"]
+
+
+async def test_search_page_of_only_empty_profiles_keeps_the_list_going(
+    module, session
+):
+    empty = {"id": 8, "name": "An Artist", "picture": None, "mixes": {}}
+    body = {"artists": {"items": [empty]}}
+    session.request.request = Mock(return_value=SimpleNamespace(json=lambda: body))
+    result = await module.search(SearchType.artist, "An Artist", offset=50, limit=1)
+    assert (result.items, result.total) == ([], 52)
+
+
 async def test_concurrent_search_kinds_share_one_upstream_request(tmp_path, search_rows):
     client = TidalClient(tmp_path / "session.json")
     client.ready = True
