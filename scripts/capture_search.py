@@ -1,8 +1,8 @@
 """Record what this plugin's search returns, for the server's search tests.
 
 Writes one JSON fixture per query: the hits of every kind, in the order the
-plugin returns them, as the server receives them. The evaluation in
-KalinkaPlayer (packages/kalinka-server/tests/search_fixtures) replays them.
+plugin returns them, as the server receives them. The server's tests in
+KalinkaPlayer (packages/kalinka-server/tests/search_fixtures) replay them.
 
     python scripts/capture_search.py --out DIR "pink floyd" "abbey road"
 
