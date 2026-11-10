@@ -48,7 +48,13 @@ def test_plugin_discovery():
 
 
 def test_tidal_offers_its_catalogs_as_a_home_source(module):
-    assert module.capabilities() == frozenset({ModuleCapability.CATALOGS})
+    assert ModuleCapability.CATALOGS in module.capabilities()
+
+
+def test_tidal_search_order_is_kept_where_the_sdk_can_say_so(module):
+    ranked = getattr(ModuleCapability, "RANKED_SEARCH", None)
+    expected = {ModuleCapability.CATALOGS} | ({ranked} if ranked else set())
+    assert module.capabilities() == frozenset(expected)
 
 
 async def test_root_is_paginated_and_available_before_sign_in(module):
