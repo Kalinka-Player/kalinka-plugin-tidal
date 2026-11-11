@@ -11,7 +11,12 @@ from tidalapi.exceptions import ObjectNotFound
 from tidalapi.media import Stream
 from tidalapi.page import PageItem, PageLink
 
-from kalinka_plugin_sdk.datamodel import EntityId, EntityType
+from kalinka_plugin_sdk.datamodel import (
+    EntityId,
+    EntityType,
+    PreviewContentType,
+    PreviewType,
+)
 from kalinka_plugin_sdk.filters import FilterQuery, UnsupportedFilter
 from kalinka_plugin_sdk.inputmodule import (
     ModuleCapability,
@@ -72,6 +77,26 @@ async def test_root_is_paginated_and_available_before_sign_in(module):
     ]
     for item in first.items + rest.items:
         assert await module.get(item.id) == item
+
+
+def test_root_opens_as_cards_of_its_catalogs(module):
+    preview = module.root_preview()
+    assert preview.type == PreviewType.IMAGE_TEXT
+    assert preview.content_type == PreviewContentType.CATALOG
+
+
+async def test_only_track_lists_among_the_static_catalogs_open_as_rows(module):
+    module.client.run = Mock(side_effect=AssertionError("No network for the root"))
+    catalogs = [
+        *(await module.browse(cat("root"))).items,
+        *(await module.browse(cat("collection"))).items,
+    ]
+    rows = [
+        item.name
+        for item in catalogs
+        if item.catalog.preview_config.type != PreviewType.IMAGE_TEXT
+    ]
+    assert rows == ["Favorite Tracks"]
 
 
 @pytest.mark.parametrize("page,title", [
