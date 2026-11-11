@@ -123,6 +123,20 @@ def page_path(value):
     return path
 
 
+def preview(content=None):
+    """Cards of whatever a listing holds, except tracks, which stay rows."""
+    return Preview(
+        type=(
+            PreviewType.TILE
+            if content == PreviewContentType.TRACK
+            else PreviewType.IMAGE_TEXT
+        ),
+        content_type=content,
+        items_count=10,
+        rows_count=2,
+    )
+
+
 def catalog(value, title, *, content=None, role=None, image=None, can_add=False):
     eid = entity_id(EntityType.CATALOG, value)
     return BrowseItem(
@@ -135,16 +149,7 @@ def catalog(value, title, *, content=None, role=None, image=None, can_add=False)
             title=title,
             image=image,
             role=role,
-            preview_config=Preview(
-                type=(
-                    PreviewType.TILE
-                    if content == PreviewContentType.TRACK
-                    else PreviewType.IMAGE_TEXT
-                ),
-                content_type=content,
-                items_count=10,
-                rows_count=2,
-            ),
+            preview_config=preview(content),
         ),
     )
 
@@ -254,6 +259,9 @@ class TidalInputModule(InputModule):
             for capability in (ModuleCapability.CATALOGS, RANKED_SEARCH)
             if capability is not None
         )
+
+    def root_preview(self):
+        return preview(PreviewContentType.CATALOG)
 
     def _remember(self, key, value, *, ttl=300):
         self._check_account()
