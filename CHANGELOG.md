@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.0
+
+- Open the TIDAL root as cards. Home, Explore, Genres, Moods, My Mixes and My Collection open as a grid of cards instead of rows, with Kalinka Player 5.19.0; an older server keeps the rows.
+- Keep TIDAL's own search order. TIDAL ranks each kind of result by relevance and popularity, and Kalinka Player 5.19.0 keeps that order instead of ranking hits by how their names match the query; an older server goes on ranking by name.
+- Leave artist profiles with nothing released out of search. TIDAL lists profiles that hold no albums, singles or tracks, so a search for "pink floyd" returned 17 of them among 50 artists, 11 named exactly like the band.
+- Still needs plugin SDK 3.19, which ships with Kalinka Player 5.17.0. The root's cards and the search order use plugin SDK 3.22, which ships with Kalinka Player 5.19.0.
+
 ## 0.6.0
 
 - Report the encoded audio codec separately from the container or manifest
