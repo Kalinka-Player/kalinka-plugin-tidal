@@ -48,6 +48,7 @@ from kalinka_plugin_sdk.inputmodule import (
 )
 
 from .client import CatalogPage
+from .favourites import Favourites, favourite_target
 from .paging import (
     Listing,
     item_path,
@@ -72,6 +73,8 @@ KINDS = {
 MAX_LIMIT = 50
 # SDK 3.22: the server keeps TIDAL's search order. Older servers rank by name.
 RANKED_SEARCH = getattr(ModuleCapability, "RANKED_SEARCH", None)
+# SDK 3.24: the server offers to mark items only of a source that reports it.
+FAVORITES = getattr(ModuleCapability, "FAVORITES", None)
 MP4_MIME_TYPES = frozenset({"audio/mp4", "audio/m4a"})
 
 
@@ -241,6 +244,7 @@ class TidalInputModule(InputModule):
     def __init__(self, client):
         self.client = client
         self.session = client.session
+        self._favourites = Favourites(self.session)
         self._cache = OrderedDict()
         # Container expansion is followed by get_all(). Keep that metadata
         # briefly, including containers larger than the general entity cache.
@@ -256,7 +260,11 @@ class TidalInputModule(InputModule):
     def capabilities(self) -> frozenset[ModuleCapability]:
         return frozenset(
             capability
-            for capability in (ModuleCapability.CATALOGS, RANKED_SEARCH)
+            for capability in (
+                ModuleCapability.CATALOGS,
+                RANKED_SEARCH,
+                FAVORITES if self.client.ready else None,
+            )
             if capability is not None
         )
 
@@ -434,23 +442,37 @@ class TidalInputModule(InputModule):
             EntityType.PLAYLIST: self.session.parse_playlist,
         }[kind]
 
-    def _remote_list(self, listing, offset, limit):
+    def _marked(self, rows):
+        """Favourites, each carrying when it was marked."""
+        items = []
+        for row in rows:
+            item = self._item(row)
+            if row.user_date_added is not None:
+                item.timestamp = int(row.user_date_added.timestamp())
+            items.append(item)
+        return items
+
+    def _remote_list(self, listing, offset, limit, convert=None):
         rows, total = read_page(self.session.request, listing, offset, limit)
         return BrowseItemList(
-            offset=offset, limit=limit, total=total, items=self._items(rows)
+            offset=offset,
+            limit=limit,
+            total=total,
+            items=(convert or self._items)(rows),
         )
 
     def _collection_listing(self, kind):
-        user = item_path("users/%s", self.session.user.id)
         if kind == "playlist":
             # Entries wrap each playlist with the date it was added.
             return Listing(
-                user + "/playlistsAndFavoritePlaylists",
+                item_path("users/%s", self.session.user.id)
+                + "/playlistsAndFavoritePlaylists",
                 lambda entry: self.session.parse_playlist(entry["playlist"]),
             )
         if kind not in ("track", "album", "artist"):
             raise LookupError("Unknown TIDAL collection.")
-        return Listing(f"{user}/favorites/{kind}s", self._parser(EntityType(kind)))
+        kind = EntityType(kind)
+        return self._favourites.listing(kind, self._parser(kind))
 
     def _artist_listing(self, artist_id, kind):
         artist = item_path("artists/%s", artist_id)
@@ -567,9 +589,9 @@ class TidalInputModule(InputModule):
                 role=CatalogRole.LIBRARY,
             )
             for kind, title in (
-                (EntityType.TRACK, "Favorite Tracks"),
-                (EntityType.ALBUM, "Favorite Albums"),
-                (EntityType.ARTIST, "Favorite Artists"),
+                (EntityType.TRACK, "Favourite Tracks"),
+                (EntityType.ALBUM, "Favourite Albums"),
+                (EntityType.ARTIST, "Favourite Artists"),
                 (EntityType.PLAYLIST, "My Playlists"),
             )
         ]
@@ -952,22 +974,47 @@ class TidalInputModule(InputModule):
 
         return await self.client.run(resolve)
 
-    # TIDAL account collections are exposed above as read-only catalogs. The
-    # legacy favorite/playlist mutation API isn't advertised or emulated.
+    # Signed out, the two reads answer empty rather than fail: a server
+    # without SDK 3.24 asks every source at once and one failure fails them all.
     async def list_favorite(self, type, filter, offset=0, limit=50):
-        return EmptyList(offset, limit)
+        offset, limit = self._pagination(offset, limit)
+        if filter:
+            raise UnsupportedFilter("filter", "TIDAL cannot search favourites")
+        if not self.client.ready:
+            return EmptyList(offset, limit)
+        kind = EntityType(type.value)
+        return await self.client.run(
+            lambda: self._remote_list(
+                self._favourites.listing(kind, self._parser(kind)),
+                offset,
+                limit,
+                self._marked,
+            )
+        )
 
     async def get_favorite_ids(self):
-        return FavoriteIds()
-
-    async def playlist_user_list(self, offset=0, limit=25):
-        return EmptyList(offset, limit)
+        if not self.client.ready:
+            return FavoriteIds()
+        ids = await self.client.run(self._favourites.ids)
+        return FavoriteIds(
+            **{
+                kind.value + "s": [entity_id(kind, value) for value in values]
+                for kind, values in ids.items()
+            }
+        )
 
     async def add_to_favorite(self, id):
-        raise NotImplementedError("Edit TIDAL favorites in the TIDAL app.")
+        kind, value = favourite_target(EntityId.from_string(id))
+        await self.client.run(lambda: self._favourites.add(kind, value))
 
     async def remove_from_favorite(self, id):
-        raise NotImplementedError("Edit TIDAL favorites in the TIDAL app.")
+        kind, value = favourite_target(EntityId.from_string(id))
+        await self.client.run(lambda: self._favourites.remove(kind, value))
+
+    # TIDAL playlists are exposed above as read-only catalogs. The playlist
+    # mutation API isn't advertised or emulated.
+    async def playlist_user_list(self, offset=0, limit=25):
+        return EmptyList(offset, limit)
 
     async def playlist_create(self, name, description):
         raise NotImplementedError("Edit TIDAL playlists in the TIDAL app.")

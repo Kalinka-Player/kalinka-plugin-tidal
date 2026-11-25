@@ -28,7 +28,7 @@ def module(session):
     async def run(operation, **kwargs):
         return operation()
 
-    return TidalInputModule(SimpleNamespace(session=session, run=run))
+    return TidalInputModule(SimpleNamespace(session=session, run=run, ready=True))
 
 
 class TidalLists:

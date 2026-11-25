@@ -58,8 +58,7 @@ def test_tidal_offers_its_catalogs_as_a_home_source(module):
 
 def test_tidal_search_order_is_kept_where_the_sdk_can_say_so(module):
     ranked = getattr(ModuleCapability, "RANKED_SEARCH", None)
-    expected = {ModuleCapability.CATALOGS} | ({ranked} if ranked else set())
-    assert module.capabilities() == frozenset(expected)
+    assert (ranked in module.capabilities()) == (ranked is not None)
 
 
 async def test_root_is_paginated_and_available_before_sign_in(module):
@@ -96,7 +95,7 @@ async def test_only_track_lists_among_the_static_catalogs_open_as_rows(module):
         for item in catalogs
         if item.catalog.preview_config.type != PreviewType.IMAGE_TEXT
     ]
-    assert rows == ["Favorite Tracks"]
+    assert rows == ["Favourite Tracks"]
 
 
 @pytest.mark.parametrize("page,title", [
@@ -528,7 +527,9 @@ async def test_collection_uses_paged_library_calls(
     assert [call[0].rsplit("/", 1)[-1] for call in lists.calls] == [
         "tracks", "albums", "artists", "playlistsAndFavoritePlaylists"
     ]
-    assert all(call[1] == {"offset": 50, "limit": 50} for call in lists.calls)
+    page = {"offset": 50, "limit": 50}
+    newest_first = {"order": "DATE", "orderDirection": "DESC"}
+    assert [call[1] for call in lists.calls] == [page | newest_first] * 3 + [page]
     assert [result.total for result in results] == [60] * 4
     assert [result.items[0].name for result in results] == [
         "A Song (Live)", "An Album", "An Artist", "A Playlist"

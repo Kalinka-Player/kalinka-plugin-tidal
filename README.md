@@ -71,8 +71,8 @@ account on this player does not sign it out on other devices.
   by TIDAL for your account and region.
 - **Explore**, **Genres** and **Moods** expose TIDAL's pages of the same names,
   with their shelves and the pages those link to.
-- **My Collection** exposes favorite tracks, albums, artists, and your created
-  and saved playlists.
+- **My Collection** exposes favourite tracks, albums and artists, most recently
+  marked first, and your created and saved playlists.
 - **My Mixes** exposes personalized mixes and their tracks.
 - Albums and playlists expose tracks; artists expose albums, EPs and singles,
   top tracks, and similar artists. Search supports all four entity types.
@@ -94,8 +94,15 @@ same-title sections also use their content; a saved link expires if that
 content changes, so reopening its parent is necessary. Older V1 section links
 from 0.1.0 may also need to be reopened after upgrading.
 
-TIDAL collections are read-only in Kalinka. Edit TIDAL favorites and playlists
-in the TIDAL app; Kalinka's own collections can still reference TIDAL tracks.
+Tracks, albums, artists and playlists can be marked and unmarked as TIDAL
+favourites from Kalinka while signed in; a change shows in the TIDAL app at
+once, and one made there shows in Kalinka the next time it reads them. The
+server offers this only where its plugin SDK is 3.24 or later; an older one
+never asks. TIDAL lets you mark a playlist you created, and so does Kalinka.
+Favourites cannot be searched: a filter is refused rather than ignored.
+
+TIDAL playlists are read-only in Kalinka. Edit them in the TIDAL app;
+Kalinka's own collections can still reference TIDAL tracks.
 
 ## Playback and limitations
 
