@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.0
+
+- Mark and unmark TIDAL favourites from Kalinka. Tracks, albums, artists and playlists can be marked or unmarked while signed in, and a change shows in the TIDAL app at once. Kalinka app 0.29.0 shows a heart on each, with Kalinka Player 5.21.0.
+- Keep TIDAL in Kalinka's favourites on Kalinka Player 5.21.0. That server asks only sources that say they keep favourites, and 0.7.0 does not, so on it TIDAL drops out of the app's Favourites. Upgrade TIDAL together with the server.
+- List favourite tracks, albums and artists most recently marked first, in My Collection too, where they were in TIDAL's default order. Its catalogs are now named Favourite Tracks, Favourite Albums and Favourite Artists.
+- Still needs plugin SDK 3.19, which ships with Kalinka Player 5.17.0. Marking favourites uses plugin SDK 3.24, which ships with Kalinka Player 5.21.0; an older server only lists them.
+
 ## 0.7.0
 
 - Open the TIDAL root as cards. Home, Explore, Genres, Moods, My Mixes and My Collection open as a grid of cards instead of rows, with Kalinka Player 5.19.0; an older server keeps the rows.
